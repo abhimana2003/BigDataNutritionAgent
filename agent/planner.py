@@ -87,10 +87,19 @@ your grocery list.)
 
 ## Grocery list rules
 1. Aggregate ingredients across all 7 days into ONE consolidated list.
-2. Merge duplicates (same ingredient) into one item with summed quantity when possible.
-3. Keep ingredient names generic and normalized (e.g., "onion", not "small onion, diced").
-4. Exclude trivial pantry/household items such as water, salt, pepper, ice, etc.
-5. Use null for unknown unit/quantity.
+2. ONLY include items that can be physically purchased in a grocery store.
+3. Remove all preparation/cooking instructions (e.g. "drained", "rinsed", "beaten", "melted", etc.).
+4. Remove all quantity descriptors and measurements (e.g. "1 cup", "2 tbsp", "large", "small").
+5. Remove all cooking instructions (e.g. "at room temperature", "chopped", "diced", "sliced").
+6. Normalize names: "dry bread crumbs" → "bread crumbs", "cooked chicken" → "chicken breast", etc.
+7. Exclude trivial pantry staples: water, salt, pepper, oil, garlic powder, paprika, vanilla, cinnamon.
+8. Merge duplicates (same ingredient) into one item with summed quantity when possible.
+9. Use null for unknown unit/quantity.
+10. Return ONLY ingredient names that a shopper would look for in a store, nothing else.
+
+## Examples of what to include vs. exclude:
+INCLUDE: "chicken breast", "olive oil", "spinach", "lemon", "salmon", "greek yogurt", "bread crumbs"
+EXCLUDE: "drained rinsed", "at room temperature", "chopped", "patted dry", "ice cube", "water", "salt", "pepper"
 
 Respond ONLY with the JSON object.
 """
