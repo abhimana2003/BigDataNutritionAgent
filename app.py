@@ -40,70 +40,116 @@ def show_profile_form() -> None:
 
     # use existing values if present, otherwise defaults
     with st.form("profile_form"):
-        age = st.number_input(
-            "Age", min_value=1, max_value=120, value=existing.get("age", 25)
-        )
+        # use text inputs for numeric fields so that the boxes start empty
+        age = st.text_input("Age", value=str(existing.get("age", "")))
         st.subheader("Height")
         feet, inches = st.columns(2)
         with feet:
-            heightFt = st.number_input(
-                "Feet", min_value=1, max_value=8, value=existing.get("height_feet", 5)
-            )
+            heightFt = st.text_input("Feet", value=str(existing.get("height_feet", "")))
         with inches:
-            heightIn = st.number_input(
-                "Height (inches)", min_value=0, max_value=11, value=existing.get("height_inches", 0)
-            )
-        weight = st.number_input(
-            "Weight (lbs)", min_value=40.0, max_value=1000.0, value=existing.get("weight", 40.0)
-        )
+            heightIn = st.text_input("Height (inches)", value=str(existing.get("height_inches", "")))
+        weight = st.text_input("Weight (lbs)", value=str(existing.get("weight", "")))
+        gender_opts = ["", "Female", "Male", "Other"]
         gender = st.selectbox(
-            "Gender", ["Female", "Male", "Other"], index=["Female", "Male", "Other"].index(existing.get("gender", "Female"))
+            "Gender", gender_opts,
+            index=gender_opts.index(existing.get("gender", "")),
+            key=f"gender_{edit_id}",
         )
+        goal_opts = ["", "weight_loss", "maintenance", "high_protein"]
         goal = st.selectbox(
             "Goal",
-            ["weight_loss", "maintenance", "high_protein"],
-            format_func=lambda x: x.replace("_"," ").title(),
-            index=["weight_loss", "maintenance", "high_protein"].index(existing.get("goal", "weight_loss")),
+            goal_opts,
+            format_func=lambda x: x.replace("_", " ").title() if x else "",
+            index=goal_opts.index(existing.get("goal", "")),
+            key=f"goal_{edit_id}",
         )
+        # dietary/allergy/medical multiselects include an explicit "None"
+        # entry so a user without any restrictions can choose it.  When the
+        # form is submitted we convert "None" back to an empty list.
+        # keep the "None" choice available but do not preselect it when the
+        # profile is new; an empty list means no restrictions.
+        dietary_opts = ["None", "Vegetarian", "Vegan", "Pescaterian", "Low Carb", "Keto"]
+        allergies_opts = ["None", "Nuts", "Dairy", "Gluten", "Soy", "Eggs"]
+        medical_opts = ["None", "Diabetes", "Hypertension", "Celiac", "High Cholesterol"]
+
         dietary = st.multiselect(
             "Dietary Preferences",
-            ["Vegetarian", "Vegan", "Pescaterian", "Low Carb", "Keto"],
+            dietary_opts,
             default=existing.get("dietary_preferences", []),
+            key=f"dietary_{edit_id}",
         )
         allergies = st.multiselect(
-            "Allergies", ["Nuts", "Dairy", "Gluten", "Soy", "Eggs"], default=existing.get("allergies", []),
+            "Allergies", allergies_opts, default=existing.get("allergies", []),
+            key=f"allergies_{edit_id}",
         )
         medical = st.multiselect(
             "Medical Conditions",
-            ["Diabetes", "Hypertension", "Celiac", "High Cholesterol"],
+            medical_opts,
             default=existing.get("medical_conditions", []),
+            key=f"medical_{edit_id}",
         )
+
+        # display meaningful labels for budget and cooking time while still
+        # storing the canonical low/medium/high values in the database
+        budget_values = ["", "low", "medium", "high"]
+        # updated ranges to reflect larger weekly budgets
+        budget_labels = {"low": "$0-200", "medium": "$200-400", "high": "$400-600"}
+        current_budget = existing.get("budget_level", "")
+        if current_budget not in budget_values:
+            current_budget = ""
         budget = st.selectbox(
             "Weekly Grocery Budget",
-            ["low", "medium", "high"],
-            format_func=lambda x: x.title(),
-            index=["low", "medium", "high"].index(existing.get("budget_level", "medium")),
+            budget_values,
+            format_func=lambda x: budget_labels.get(x, x.title()),
+            index=budget_values.index(current_budget),
+            key=f"budget_{edit_id}",
         )
+
+        cook_values = ["", "short", "medium", "long"]
+        cook_labels = {"short": "<30 min", "medium": "30-60 min", "long": ">60 min"}
+        current_cook = existing.get("cooking_time", "")
+        if current_cook not in cook_values:
+            current_cook = ""
         cooking_time = st.selectbox(
             "Cooking Time",
-            ["short", "medium", "long"],
-            format_func=lambda x: x.title(),
-            index=["short", "medium", "long"].index(existing.get("cooking_time", "short")),
+            cook_values,
+            format_func=lambda x: cook_labels.get(x, x.title()),
+            index=cook_values.index(current_cook),
+            key=f"cooking_{edit_id}",
         )
 
         submitted = st.form_submit_button("Submit Profile")
 
     if submitted:
+        # convert any "None" selections back into empty lists before sending
+        def clean_list(lst):
+            if not lst or "None" in lst:
+                return []
+            return lst
+
+        # convert numeric strings, allow blank -> 0 or None if desired
+        def to_int(s, default=None):
+            try:
+                return int(s)
+            except Exception:
+                return default
+
+        def to_float(s, default=None):
+            try:
+                return float(s)
+            except Exception:
+                return default
+
         payload = {
-            "age": int(age),
-            "height_feet": int(heightFt),
-            "height_inches": int(heightIn),
-            "weight": float(weight),
-            "gender": gender,
-            "goal": goal,
-            "dietary_preferences": dietary or [],
-            "allergies": allergies or [],
-            "medical_conditions": medical or [],
+            "age": to_int(age),
+            "height_feet": to_int(heightFt),
+            "height_inches": to_int(heightIn),
+            "weight": to_float(weight),
+            "gender": gender or None,
+            "goal": goal or None,
+            "dietary_preferences": clean_list(dietary),
+            "allergies": clean_list(allergies),
+            "medical_conditions": clean_list(medical),
             "budget_level": budget,
             "cooking_time": cooking_time,
         }
@@ -180,18 +226,7 @@ with tab3:
                 return
             for item in grocery:
                 name = item.get("name")
-                quantity = item.get("quantity")
-                unit = item.get("unit")
-                category = item.get("category")
-                qty_text = str(quantity) if quantity is not None else ""
-                unit_text = str(unit).strip() if unit not in (None, "", "null") else ""
-                category_text = str(category).strip() if category not in (None, "", "null") else ""
-                left = " ".join([x for x in [qty_text, unit_text] if x]).strip()
-                if left:
-                    line = f"- {name}: {left}"
-                else:
-                    line = f"- {name}"
-                st.write(line)
+                st.write(f"- {name}")
             return
 
         # No manual fetch: prompt user to generate a meal plan in Meal Plan tab

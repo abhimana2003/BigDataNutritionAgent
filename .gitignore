@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+venv/
+.venv/
+agent/meal_type_model.pkl
+run_project.sh

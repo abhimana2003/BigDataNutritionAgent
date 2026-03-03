@@ -55,7 +55,8 @@ def generate_mealplan(profile_id: int, db: Session = Depends(get_db)):
         cooking_time=db_profile.cooking_time,
     )
 
-    from services.nutrition_engine import calculate_targets
+    # calculate nutrition targets using the agent implementation directly
+    from agent.nutrition_engine import calculate_targets
     targets = calculate_targets(profile_create)
     nutrition_targets = {
         "daily_calories": targets.daily_calories,

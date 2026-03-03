@@ -4,13 +4,25 @@ from typing import List, Optional, Tuple
 
 from agent.interfaces import MealSlot, Recipe, UserPreferences, UserProfile
 
+# optional classifier so we can fall back to a learned model if rules
+# aren't sufficient.  The module will train itself on first import.
+try:
+    from agent.meal_type_classifier import predict_meal_type
+except ImportError:
+    predict_meal_type = lambda r: "lunchdinner"  # no classifier available
+
 BREAKFAST_INCLUDE = [
-    "breakfast", "oat", "omelette", "egg", "pancake", "waffle", "toast",
+    "breakfast", "oat", "omelette", "pancake", "waffle", "toast",
     "parfait", "smoothie", "yogurt", "granola", "cereal", "muffin",
 ]
+
+# Additional excludes to keep obvious non-breakfast meals out; adding a
+# generic "fish"/"salmon" entry because those were creeping in via poor
+# classifier predictions and still have breakfasty ingredients like egg.
 BREAKFAST_EXCLUDE = [
     "steak", "burger", "curry", "biryani", "stir-fry", "stir fry", "pasta",
-    "taco", "meatball", "bbq", "sandwich", "wrap", "salmon dinner",
+    "taco", "meatball", "bbq", "sandwich", "wrap", "salmon",
+    "fish",
 ]
 LUNCH_DINNER_EXCLUDE = [
     "smoothie", "parfait", "oatmeal", "overnight oats", "cereal",
@@ -30,12 +42,33 @@ def is_slot_compatible(recipe: Recipe, slot: Optional[MealSlot]) -> bool:
     text = _recipe_text(recipe)
     meal_type = slot.meal_type.lower()
 
+    # helper: check tags/cuisine path for explicit meal category
+    def has_breakfast_tag() -> bool:
+        if recipe.tags:
+            for t in recipe.tags:
+                if "breakfast" in str(t).lower():
+                    return True
+        if recipe.cuisine:
+            if "breakfast" in str(recipe.cuisine).lower():
+                return True
+        return False
+
     if meal_type == "breakfast":
-        has_breakfast_signal = any(k in text for k in BREAKFAST_INCLUDE)
+        # first, consult the classifier if present
+        if predict_meal_type(recipe) != "breakfast":
+            return False
+
+        # still apply rule-based keywords for extra safety
+        has_breakfast_signal = has_breakfast_tag() or any(k in text for k in BREAKFAST_INCLUDE)
         has_non_breakfast_signal = any(k in text for k in BREAKFAST_EXCLUDE)
         return has_breakfast_signal and not has_non_breakfast_signal
 
     if meal_type in ("lunch", "dinner"):
+        # classifier may collapse lunch/dinner into same bucket; if it says
+        # breakfast, we must reject
+        if predict_meal_type(recipe) == "breakfast":
+            return False
+
         has_light_breakfast_signal = any(k in text for k in LUNCH_DINNER_EXCLUDE)
         return not has_light_breakfast_signal
 
