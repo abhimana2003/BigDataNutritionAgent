@@ -105,6 +105,7 @@ class MealPlanResponse(BaseModel):
     days: List[DayPlan] = []
     weekly_totals: Optional[NutritionTargets]
     grocery_list: Optional[List["GroceryItem"]]
+    grocery_text: Optional[str] = None
     notes: Optional[str]
 
 # grocery list objects 
@@ -117,6 +118,8 @@ class GroceryItem(BaseModel):
 
 class GroceryList(BaseModel):
     items: List[GroceryItem] = []
+    # optional pretty text (e.g. bullet list) that can be shown directly to users
+    text: Optional[str] = None
 
 # feedback / preference 
 

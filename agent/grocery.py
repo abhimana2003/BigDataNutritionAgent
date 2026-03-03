@@ -102,6 +102,8 @@ BLACKLIST_INGREDIENTS = {
     "taste", "divided", "halved", "quartered", "sliced", "chopped",
     "peeled", "diced", "minced", "grated", "shredded", "beaten", "fresh",
     "ground", "dried", "skinless", "boneless", "for garnish", "optional",
+    # avoid ice-related junk that some recipes list for drinks
+    "ice", "cube", "ice cube", "ice cubes", "cubes",
 }
 
 
@@ -121,6 +123,9 @@ def _normalize_ingredient(raw: str) -> str:
     )
     # remove size/quantity descriptors that are not useful
     s = re.sub(r"\b(ounce|scoop|large|small|medium|thinly|thickly|pinch|can|container|jar|pkg|package)\b", "", s)
+    # strip trailing commentary or modifiers ('such as...', 'similar...', 'with...',
+    # 'at room temperature', etc.)
+    s = re.split(r"\b(?:such as|similar|with|and other|or other|to your liking|your favorite|at room temperature|room temperature)\b", s)[0]
     # Remove non-alphabetic characters except spaces
     s = re.sub(r"[^a-z\s]", "", s)
     # Normalize whitespace
@@ -143,6 +148,15 @@ def aggregate_ingredients(
     """
     ingredient_counts: Dict[str, int] = defaultdict(int)
 
+    def _is_valid_ingredient(name: str) -> bool:
+        # reject overly verbose junk or instructions
+        if not name or len(name.split()) > 5:
+            return False
+        for bad in ("such", "similar", "favorite", "amount", "chunk", "pound", "quart", "slice", "piece", "optional", "room temperature"):
+            if bad in name:
+                return False
+        return True
+
     for day_plan in meal_plan.days:
         for meal in day_plan.meals:
             recipe = recipes_by_id.get(meal.recipe_id)
@@ -152,8 +166,13 @@ def aggregate_ingredients(
             seen_in_recipe = set()
             for raw_ing in recipe.ingredients:
                 name = _normalize_ingredient(raw_ing)
-                # Skip empty strings and blacklisted items
-                if name and name not in BLACKLIST_INGREDIENTS and name not in seen_in_recipe:
+                # Skip empty strings, blacklisted items, or invalid names
+                if (
+                    name
+                    and name not in BLACKLIST_INGREDIENTS
+                    and _is_valid_ingredient(name)
+                    and name not in seen_in_recipe
+                ):
                     ingredient_counts[name] += 1
                     seen_in_recipe.add(name)
 
@@ -170,6 +189,37 @@ def aggregate_ingredients(
     return items
 
 
+# optional LLM post‑processing --------------------------------------------------
+
+def _llm_refine_list(item_names: List[str]) -> Optional[str]:
+    """Use an LLM to rewrite a raw ingredient name list into a shopper-friendly
+    text output.  Returns ``None`` if the client can't be imported or the call
+    fails.  The returned text should be a bullet-point list or similar.
+    """
+    try:
+        from agent.planner import _default_openai_client
+    except ImportError:
+        return None
+
+    client = _default_openai_client()
+    system = (
+        "You are an assistant that converts a list of grocery items into a clean"
+        " shopping list.  The input lines are ingredient names already normalized"
+        " from recipes; please deduplicate them, discard any that are still"
+        " nonsensical (e.g. instructions or descriptions), and output one simple"
+        " bullet point or line per actual ingredient.  Do not add measurements"
+        " or quantities.  Only return the list text."
+    )
+    user = "Raw items:\n" + "\n".join(item_names)
+    try:
+        text = client(system, user)
+        if text:
+            return text.strip()
+    except Exception:
+        pass
+    return None
+
+
 class SimpleGroceryGenerator(GroceryGenerator):
     """Produces a consolidated grocery list by deduplicating ingredients.
     
@@ -184,4 +234,14 @@ class SimpleGroceryGenerator(GroceryGenerator):
         recipes_by_id: Dict[int, Recipe],
     ) -> GroceryList:
         items = aggregate_ingredients(meal_plan, recipes_by_id)
-        return GroceryList(items=items)
+        grocery = GroceryList(items=items)
+        # try to produce a human-readable text version via LLM
+        try:
+            names = [i.name for i in items]
+            if names:
+                pretty = _llm_refine_list(names)
+                if pretty:
+                    grocery.text = pretty
+        except Exception:
+            pass
+        return grocery

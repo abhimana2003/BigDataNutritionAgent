@@ -166,6 +166,8 @@ class GroceryItem(BaseModel):
 class GroceryList(BaseModel):
     """Aggregated grocery list from a meal plan."""
     items: List[GroceryItem] = []
+    # optional human-readable text produced by an LLM or other postprocessor
+    text: Optional[str] = None
 
 
 

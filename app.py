@@ -221,6 +221,11 @@ with tab3:
         if gp:
             st.info("Showing grocery list from last generated meal plan")
             grocery = gp.get("grocery_list", [])
+            text = gp.get("grocery_text")
+            if text:
+                # if the API provided a pre-formatted list, show that instead
+                st.markdown(text)
+                return
             if not grocery:
                 st.write("No grocery items in last meal plan.")
                 return

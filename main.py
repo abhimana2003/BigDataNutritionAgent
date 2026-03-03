@@ -179,6 +179,7 @@ def generate_mealplan(profile_id: int, db: Session = Depends(get_db)):
         )
         for item in grocery.items
     ]
+    grocery_text = getattr(grocery, "text", None)
 
     return schemas.MealPlanResponse(
         profile_id=profile_id,
@@ -190,5 +191,6 @@ def generate_mealplan(profile_id: int, db: Session = Depends(get_db)):
             fat_g=total_fat,
         ),
         grocery_list=grocery_out,
+        grocery_text=grocery_text,
         notes=plan.notes,
     )

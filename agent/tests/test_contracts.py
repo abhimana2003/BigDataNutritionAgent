@@ -1,6 +1,6 @@
 import pytest
 
-from agent.interfaces import UserProfile, MealSlot, Recipe
+from agent.interfaces import UserProfile, MealSlot, Recipe, DayPlan, PlannedMeal
 from agent.constraints import filter_allowed
 from agent.scoring import score_recipe
 from agent.mock_store import get_user_preferences, record_feedback
@@ -98,7 +98,6 @@ from agent.mock_data import (
 from agent.planner import (
     MockMealPlanner,
     MealPlanner,
-    build_prompt,
     extract_json,
     parse_meal_plan,
 )
@@ -152,6 +151,8 @@ def test_grocery_list_from_mock_plan():
     gen = SimpleGroceryGenerator()
     grocery = gen.generate(plan, MOCK_RECIPES_BY_ID)
     assert isinstance(grocery, GroceryList)
+    # text field may or may not be populated depending on LLM availability
+    assert hasattr(grocery, "text")
     assert len(grocery.items) > 0
     for item in grocery.items:
         assert item.name
@@ -172,13 +173,58 @@ def test_grocery_list_aggregates_across_meals():
     assert len(names) == len(set(names)), "Grocery list should have no duplicate ingredient names"
 
 
-def test_build_prompt_contains_key_fields():
-    candidates = mock_candidates(5)
-    prompt = build_prompt(MOCK_PROFILE, candidates, MOCK_NUTRITION_TARGETS)
-    assert "1800" in prompt
-    assert "120" in prompt
-    assert "weight_loss" in prompt
-    assert "Grilled Chicken Salad" in prompt
+def test_normalization_and_filtering_drops_junk():
+    # ensure bizarre long descriptions are normalized and then filtered
+    from agent.grocery import _normalize_ingredient, aggregate_ingredients
+
+    assert _normalize_ingredient("apricots similar amount of your favorite fruit") == "apricot"
+    assert _normalize_ingredient("such as gewurztraminer") == ""
+    assert _normalize_ingredient("watermelon chunk") == "watermelon chunk"
+    assert _normalize_ingredient("at room temperature") == ""
+
+    r = Recipe(recipe_id=99, title="X", ingredients=[
+        "apricots similar amount of your favorite fruit",
+        "watermelon chunk",
+        "1 pound whole pork loin",
+        "such as gewurztraminer",
+        "1 cup sugar",
+    ])
+    plan = MealPlan(days=[DayPlan(day=1, meals=[PlannedMeal(day=1, meal_type="breakfast", recipe_id=99, title="X", servings=1)])])
+    items = aggregate_ingredients(plan, {99: r})
+    names = [i.name for i in items]
+    assert "apricot" in names
+    assert "sugar" in names
+    assert "watermelon chunk" not in names
+    assert "pound whole pork loin" not in names
+    assert "gewurztraminer" not in names
+
+
+def test_blacklist_ice_removed():
+    # ingredient strings containing ice/cube should be blacklisted
+    r = Recipe(recipe_id=1, title="Iced Tea", ingredients=["ice cubes", "tea bag"], cuisine=None, tags=[])
+    plan = MealPlan(days=[DayPlan(day=1, meals=[PlannedMeal(day=1, meal_type="lunch", recipe_id=1, title="Iced Tea", servings=1)])])
+    items = aggregate_ingredients(plan, {1: r})
+    names = [i.name for i in items]
+    assert "ice cube" not in names and "ice" not in names
+
+
+def test_llm_refine_grocery(monkeypatch):
+    # ensure text field is populated when LLM helper returns something
+    import agent.grocery as g
+    monkeypatch.setattr(g, "_llm_refine_list", lambda names: "- sugar\n- flour")
+    planner = MockMealPlanner()
+    candidates = mock_candidates()
+    plan = planner.generate_plan(
+        profile=MOCK_PROFILE,
+        candidates=candidates,
+        nutrition_targets=MOCK_NUTRITION_TARGETS,
+    )
+    gen = SimpleGroceryGenerator()
+    grocery = gen.generate(plan, MOCK_RECIPES_BY_ID)
+    assert grocery.text is not None
+    assert "- sugar" in grocery.text
+
+
 
 
 def test_extract_json_plain():

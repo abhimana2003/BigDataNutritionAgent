@@ -39,6 +39,10 @@ Create a 7-day meal plan using ONLY the recipes listed below.
 ## Available Recipes (id | title | kcal | protein | carbs | fat | cost | minutes)
 {recipe_table}
 
+(Note: the table above now also includes an "Ingredients:" section listing the
+ingredients for each recipe id.  Use those ingredient lists when constructing
+your grocery list.)
+
 ## Allowed Recipe IDs By Meal Type (must follow)
 - Breakfast IDs: {breakfast_ids}
 - Lunch IDs: {lunch_ids}
@@ -85,7 +89,8 @@ Create a 7-day meal plan using ONLY the recipes listed below.
 1. Aggregate ingredients across all 7 days into ONE consolidated list.
 2. Merge duplicates (same ingredient) into one item with summed quantity when possible.
 3. Keep ingredient names generic and normalized (e.g., "onion", not "small onion, diced").
-4. Use null for unknown unit/quantity.
+4. Exclude trivial pantry/household items such as water, salt, pepper, ice, etc.
+5. Use null for unknown unit/quantity.
 
 Respond ONLY with the JSON object.
 """
@@ -93,18 +98,29 @@ Respond ONLY with the JSON object.
 
 # converts recipe candidates into text rows to include in the prompt
 def build_recipe_table(candidates: List[RecipeCandidate]) -> str:
-    rows = []
+    """Return two sections:
+    1. a summary table (id, title, macros, cost, minutes)
+    2. a simple ingredient list section that the LLM can use to build the
+       grocery list.  Ingredients are separated by commas and prefixed with the
+       recipe id.
+    """
+    summary_rows = []
+    ingredient_rows = []
     for c in candidates:
         r = c.recipe
         if r is None:
             continue
-        rows.append(
+        summary_rows.append(
             f"{r.recipe_id} | {r.title} | "
             f"{r.calories or 0:.0f} | {r.protein_g or 0:.0f} | "
             f"{r.carbs_g or 0:.0f} | {r.fat_g or 0:.0f} | "
             f"${r.estimated_cost or 0:.2f} | {r.total_minutes or 0} min"
         )
-    return "\n".join(rows)
+        if r.ingredients:
+            # join ingredients list into one comma-separated string
+            ing_text = ", ".join(str(i) for i in r.ingredients)
+            ingredient_rows.append(f"{r.recipe_id}: {ing_text}")
+    return "\n".join(summary_rows) + "\n\nIngredients:\n" + "\n".join(ingredient_rows)
 
 # inserts all the user profile info and recipe candidates into the prompt template
 def fill_in_prompt(profile: UserProfile, candidates: List[RecipeCandidate],nutrition_targets: Dict[str, float]) -> str:
@@ -253,7 +269,10 @@ def parse_grocery_list(raw: Dict[str, Any]) -> GroceryList:
             )
         )
 
-    return GroceryList(items=items)
+    grocery = GroceryList(items=items)
+    if isinstance(raw.get("grocery_text"), str):
+        grocery.text = raw.get("grocery_text")
+    return grocery
 
 
 def build_allowed_ids_by_meal_type(candidates: List[RecipeCandidate]) -> Dict[str, List[int]]:
