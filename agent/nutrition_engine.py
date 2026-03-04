@@ -1,23 +1,16 @@
 from __future__ import annotations
 
-# This module provides basic nutrition target calculations for a user
-# profile.  The original code attempted to import from a non-existent
-# ``services`` package; we instead implement the core logic here so that
-# the application remains self-contained within the ``agent`` package.
-
 from schemas import UserProfileCreate, NutritionTargets
 
 
 def calculate_targets(profile: UserProfileCreate) -> NutritionTargets:
     """Return daily calorie and macro targets based on ``profile``.
-
-    The implementation uses a simplified Mifflin-St Jeor equation to
+    uses a simplified Mifflin-St Jeor equation to
     estimate basal metabolic rate (BMR) and applies an activity
     multiplier (moderate activity level).  The targets are then adjusted
-    based on the user's goal (weight loss, maintenance, or high protein).
+    based on the user's goal 
 
-    Macros are allocated as follows:
-
+    Macros are set as follows:
     * high_protein: 2.2 g protein per kg body weight, 25%% of calories
       from fat, remainder from carbs
     * other goals: 1.6 g protein per kg body weight, 30%% of calories

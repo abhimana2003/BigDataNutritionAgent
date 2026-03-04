@@ -16,9 +16,7 @@ BREAKFAST_INCLUDE = [
     "parfait", "smoothie", "yogurt", "granola", "cereal", "muffin",
 ]
 
-# Additional excludes to keep obvious non-breakfast meals out; adding a
-# generic "fish"/"salmon" entry because those were creeping in via poor
-# classifier predictions and still have breakfasty ingredients like egg.
+# Additional excludes to keep obvious non-breakfast meals out
 BREAKFAST_EXCLUDE = [
     "steak", "burger", "curry", "biryani", "stir-fry", "stir fry", "pasta",
     "taco", "meatball", "bbq", "sandwich", "wrap", "salmon",
@@ -64,8 +62,7 @@ def is_slot_compatible(recipe: Recipe, slot: Optional[MealSlot]) -> bool:
         return has_breakfast_signal and not has_non_breakfast_signal
 
     if meal_type in ("lunch", "dinner"):
-        # classifier may collapse lunch/dinner into same bucket; if it says
-        # breakfast, we must reject
+        # classifier may collapse lunch/dinner into same bucket; if it says breakfast, we must reject
         if predict_meal_type(recipe) == "breakfast":
             return False
 
@@ -95,12 +92,7 @@ def estimate_calories(recipe: Recipe) -> Optional[float]:
     return 4 * recipe.protein_g + 4 * recipe.carbs_g + 9 * recipe.fat_g
 
 
-def score_recipe(
-    profile: UserProfile,
-    recipe: Recipe,
-    prefs: Optional[UserPreferences] = None,
-    slot: Optional[MealSlot] = None,
-) -> Tuple[float, List[str]]:
+def score_recipe(profile: UserProfile, recipe: Recipe, prefs: Optional[UserPreferences] = None, slot: Optional[MealSlot] = None) -> Tuple[float, List[str]]:
     """
     Main scoring function: returns (score, reasons).
     Higher score = better recommendation.
@@ -198,7 +190,7 @@ def goal_score(profile: UserProfile, recipe: Recipe) -> Tuple[float, List[str]]:
         elif protein >= 15:
             s += 1.0
 
-        # don’t punish calories too hard here (bulking may require calories)
+        # don’t punish calories too hard here
         if calories is not None and calories < 350:
             s -= 0.5  # might be too light
     else:

@@ -108,6 +108,9 @@ def generate_mealplan(profile_id: int, db: Session = Depends(get_db)):
         from agent.planner import MealPlanner
         planner = MealPlanner()
 
+    import logging
+    logger = logging.getLogger(__name__)
+
     try:
         plan, grocery = planner.generate_plan_with_grocery(
             profile=agent_profile,
@@ -115,10 +118,7 @@ def generate_mealplan(profile_id: int, db: Session = Depends(get_db)):
             nutrition_targets=nutrition_targets,
         )
     except Exception as e:
-        # If the LLM-based planner failed, fall back to the mock planner so the
-        # endpoint remains functional. Include the error in the notes.
-        import logging
-        logger = logging.getLogger(__name__)
+        # If the LLM-based planner failed, fall back to the mock planner so the endpoint remains functional
         logger.exception("LLM planner failed, falling back to MockMealPlanner: %s", e)
         from agent.planner import MockMealPlanner
         planner = MockMealPlanner()
@@ -132,6 +132,7 @@ def generate_mealplan(profile_id: int, db: Session = Depends(get_db)):
             plan.notes = f"[FALLBACK] {plan.notes} — original error: {str(e)[:300]}"
         else:
             plan.notes = f"[FALLBACK] original LLM planner error: {str(e)[:300]}"
+
 
     days_out = []
     for dp in plan.days:

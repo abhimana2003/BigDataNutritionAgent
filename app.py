@@ -4,7 +4,7 @@ from typing import List, Dict, Any
 
 API_URL = "http://localhost:8000/profiles"
 
-# ---------- helpers ---------------------------------------------------------
+# helpers 
 
 def fetch_profiles() -> List[Dict[str, Any]]:
     try:
@@ -200,8 +200,6 @@ def display_mealplan(data: Dict[str, Any]) -> None:
             st.write(f"- {m.get('meal_type').capitalize()}: {m.get('title')}")
 
 
-# ---------- main ------------------------------------------------------------
-
 # use streamlit's native tabs for clean horizontal navigation
 tab1, tab2, tab3 = st.tabs(["Create/Update Profile", "Meal Plan", "Grocery List"])
 
@@ -231,10 +229,26 @@ with tab3:
                 return
             for item in grocery:
                 name = item.get("name")
-                st.write(f"- {name}")
+                quantity = item.get("quantity")
+                unit = item.get("unit")
+                parts = []
+
+                if quantity is not None:
+                    if isinstance(quantity, (int, float)) and float(quantity).is_integer():
+                        parts.append(str(int(quantity)))
+                    else:
+                        parts.append(str(quantity))
+
+                if unit:
+                    parts.append(str(unit))
+
+                if name:
+                    parts.append(str(name))
+
+                if parts:
+                    st.write(f"- {' '.join(parts)}")
             return
 
-        # No manual fetch: prompt user to generate a meal plan in Meal Plan tab
         st.info("No generated meal plan cached. Go to the 'Meal Plan' tab and click 'Generate meal plan' to populate the grocery list.")
         return
 

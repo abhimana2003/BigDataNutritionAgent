@@ -136,16 +136,8 @@ def _normalize_ingredient(raw: str) -> str:
     return s
 
 
-def aggregate_ingredients(
-    meal_plan: MealPlan,
-    recipes_by_id: Dict[int, Recipe],
-) -> List[GroceryItem]:
-    """Aggregate all unique ingredients across the meal plan.
-    
-    Instead of trying to sum recipe quantities (which requires parsing raw
-    ingredient strings), we simply deduplicate ingredients by name and count
-    how many recipes use each one. This gives users a practical shopping list.
-    """
+def aggregate_ingredients(meal_plan: MealPlan, recipes_by_id: Dict[int, Recipe]) -> List[GroceryItem]:
+  
     ingredient_counts: Dict[str, int] = defaultdict(int)
 
     def _is_valid_ingredient(name: str) -> bool:
@@ -221,18 +213,8 @@ def _llm_refine_list(item_names: List[str]) -> Optional[str]:
 
 
 class SimpleGroceryGenerator(GroceryGenerator):
-    """Produces a consolidated grocery list by deduplicating ingredients.
-    
-    Rather than trying to sum recipe quantities from unparsed ingredient
-    strings, this generates a practical shopping list showing which
-    ingredients are needed and how many meals they appear in.
-    """
 
-    def generate(
-        self,
-        meal_plan: MealPlan,
-        recipes_by_id: Dict[int, Recipe],
-    ) -> GroceryList:
+    def generate(self,meal_plan: MealPlan,recipes_by_id: Dict[int, Recipe]) -> GroceryList:
         items = aggregate_ingredients(meal_plan, recipes_by_id)
         grocery = GroceryList(items=items)
         # try to produce a human-readable text version via LLM

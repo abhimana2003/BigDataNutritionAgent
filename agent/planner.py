@@ -12,11 +12,66 @@ from agent.scoring import is_slot_compatible
 
 logger = logging.getLogger(__name__)
 
+VALID_MEAL_TYPES = {"breakfast", "lunch", "dinner", "snack"}
+
+UNIT_ALIASES = {
+    "cup": "cup",
+    "cups": "cup",
+    "tbsp": "tbsp",
+    "tbsps": "tbsp",
+    "tablespoon": "tbsp",
+    "tablespoons": "tbsp",
+    "tsp": "tsp",
+    "tsps": "tsp",
+    "teaspoon": "tsp",
+    "teaspoons": "tsp",
+    "oz": "oz",
+    "ounce": "oz",
+    "ounces": "oz",
+    "lb": "lb",
+    "lbs": "lb",
+    "pound": "lb",
+    "pounds": "lb",
+    "g": "g",
+    "gram": "g",
+    "grams": "g",
+    "kg": "kg",
+    "kilogram": "kg",
+    "kilograms": "kg",
+    "ml": "ml",
+    "milliliter": "ml",
+    "milliliters": "ml",
+    "l": "l",
+    "liter": "l",
+    "liters": "l",
+    "bunch": "bunch",
+    "bag": "bag",
+    "carton": "carton",
+    "dozen": "dozen",
+    "can": "can",
+    "jar": "jar",
+    "bottle": "bottle",
+    "loaf": "loaf",
+    "count": "count",
+}
+
+DROP_GROCERY_NAMES = {"base_servings", "base servings", "ingredients", "ingredient", "none", "null", "n/a"}
+DROP_GROCERY_WORDS = {
+    "fresh", "frozen", "dried", "ground", "seasoned", "blend", "pitted", "canned", "low", "fat", "lowfat",
+    "skinless", "boneless", "sliced", "slice", "sprigs", "sprig", "leaves", "leaf",
+}
+GROCERY_BLACKLIST = {"salt", "pepper", "black pepper", "salt pepper", "salt and pepper"}
+
 # Prompt template
 
 # sets general context and instructions for LLM
 SYSTEM_PROMPT = """\
 You are a professional nutritionist AI. You create personalized 7-day meal plans.
+You MUST reply with valid JSON only — no markdown fences, no commentary outside the JSON.
+"""
+
+GROCERY_SYSTEM_PROMPT = """\
+You are a grocery planning assistant.
 You MUST reply with valid JSON only — no markdown fences, no commentary outside the JSON.
 """
 # sets instructions for each request from user
@@ -61,6 +116,7 @@ your grocery list.)
    - You MUST only use IDs from the corresponding allowed list above.
 7. Do NOT assign alcohol-based recipes or meals containing alcoholic beverages (wine, beer, liquor, spirits, cocktails).
 8. Ensure each meal has good sustenance: prefer nutritionally meaningful, filling meals (include a substantial protein/fiber/carb component) and avoid assigning very light snack-like items as full meals.
+9. Do not repeat the same recipe more than twice in the 7-day plan, unless there are very limited options for a meal type. In that case, you may repeat a recipe but try to maximize variety and avoid repeating on consecutive days.
 
 ## Required JSON output format
 {{
@@ -100,6 +156,41 @@ your grocery list.)
 ## Examples of what to include vs. exclude:
 INCLUDE: "chicken breast", "olive oil", "spinach", "lemon", "salmon", "greek yogurt", "bread crumbs"
 EXCLUDE: "drained rinsed", "at room temperature", "chopped", "patted dry", "ice cube", "water", "salt", "pepper"
+
+Respond ONLY with the JSON object.
+"""
+
+GROCERY_USER_PROMPT_TEMPLATE = """\
+Create one consolidated grocery list for the weekly meal plan below.
+
+## Weekly Meal Plan
+{meal_plan_lines}
+
+## Recipe Ingredient Details
+{recipe_ingredient_lines}
+
+## Rules
+1. Return ingredients consolidated across the whole week.
+2. Merge duplicates into one item with summed quantity.
+3. Estimate practical store purchase units when possible:
+   - examples: lb, oz, g, kg, bunch, bag, carton, dozen, can, jar, bottle, loaf, count.
+4. Quantities should represent what the user would buy at the store for the full week.
+5. Use decimal quantities only when needed (e.g., 1.5 lb).
+6. Keep ingredient names generic and normalized (e.g., "onion", not "small onion diced").
+7. If uncertain, set quantity to null and unit to null.
+8. Do not use "meals" as a unit.
+
+## Required JSON output format
+{{
+  "grocery_list": [
+    {{
+      "name": "<ingredient name>",
+      "quantity": <number or null>,
+      "unit": "<unit or null>",
+      "category": "<produce|protein|dairy|grains|pantry|spices|other>"
+    }}
+  ]
+}}
 
 Respond ONLY with the JSON object.
 """
@@ -154,6 +245,49 @@ def fill_in_prompt(profile: UserProfile, candidates: List[RecipeCandidate],nutri
     )
 
 
+def build_meal_plan_lines(plan: MealPlan) -> str:
+    lines: List[str] = []
+    for day in plan.days:
+        for meal in day.meals:
+            lines.append(
+                f"day {day.day} | {meal.meal_type} | recipe_id={meal.recipe_id} | "
+                f"title={meal.title} | planned_servings={meal.servings}"
+            )
+    return "\n".join(lines) if lines else "none"
+
+
+def build_recipe_ingredient_lines(
+    plan: MealPlan,
+    recipes_by_id: Dict[int, Recipe],
+) -> str:
+    recipe_ids: List[int] = []
+    seen = set()
+    for day in plan.days:
+        for meal in day.meals:
+            if meal.recipe_id not in seen:
+                seen.add(meal.recipe_id)
+                recipe_ids.append(meal.recipe_id)
+
+    lines: List[str] = []
+    for rid in recipe_ids:
+        recipe = recipes_by_id.get(rid)
+        if recipe is None:
+            continue
+        ingredient_text = ", ".join(recipe.ingredients) if recipe.ingredients else "none"
+        lines.append(
+            f"{recipe.recipe_id} | {recipe.title} | base_servings={recipe.servings or 1} | "
+            f"ingredients={ingredient_text}"
+        )
+    return "\n".join(lines) if lines else "none"
+
+
+def fill_in_grocery_prompt(plan: MealPlan, recipes_by_id: Dict[int, Recipe]) -> str:
+    return GROCERY_USER_PROMPT_TEMPLATE.format(
+        meal_plan_lines=build_meal_plan_lines(plan),
+        recipe_ingredient_lines=build_recipe_ingredient_lines(plan, recipes_by_id),
+    )
+
+
 # JSON parsing helpers
 
 def extract_json(text: str) -> Dict[str, Any]:
@@ -202,9 +336,6 @@ def extract_json(text: str) -> Dict[str, Any]:
                 pass
     
     raise ValueError(f"Could not extract JSON from LLM response:\n{text[:500]}")
-
-VALID_MEAL_TYPES = {"breakfast", "lunch", "dinner", "snack"}
-
 
 def parse_meal_plan(raw: Dict[str, Any], recipes_by_id: Dict[int, Recipe]) -> MealPlan:
     days_raw = raw.get("days", [])
@@ -255,6 +386,150 @@ def _parse_quantity(value: Any) -> Optional[float]:
     return None
 
 
+def _parse_fractional_number(text: str) -> Optional[float]:
+    s = text.strip()
+    if not s:
+        return None
+    if re.fullmatch(r"\d+(?:\.\d+)?", s):
+        return float(s)
+    mixed = re.fullmatch(r"(\d+)\s+(\d+)\s*/\s*(\d+)", s)
+    if mixed:
+        whole = float(mixed.group(1))
+        num = float(mixed.group(2))
+        den = float(mixed.group(3))
+        if den != 0:
+            return whole + (num / den)
+        return None
+    frac = re.fullmatch(r"(\d+)\s*/\s*(\d+)", s)
+    if frac:
+        num = float(frac.group(1))
+        den = float(frac.group(2))
+        if den != 0:
+            return num / den
+    return None
+
+
+def _clean_grocery_name(name: str) -> str:
+    s = name.strip().lower()
+    s = re.sub(r"\([^)]*\)", " ", s)
+    s = s.replace("-", " ")
+    s = re.sub(r"[^a-z0-9\s]", " ", s)
+    s = re.sub(r"\s+", " ", s).strip()
+    if s in DROP_GROCERY_NAMES:
+        return ""
+
+    # remove leading quantity-like tokens and count words from freeform names
+    s = re.sub(r"^\d+(?:\.\d+)?\s+", "", s)
+    s = re.sub(r"^(?:a|an)\s+", "", s)
+    tokens = [tok for tok in s.split() if tok not in DROP_GROCERY_WORDS]
+    s = " ".join(tokens).strip()
+
+    # special cleanup for common noisy compound seasonings
+    s = re.sub(r"\bsalt and\b", "", s).strip()
+    s = re.sub(r"\s+", " ", s).strip()
+    if s.endswith("ies") and len(s) > 3:
+        s = s[:-3] + "y"
+    elif s.endswith("s") and not s.endswith("ss"):
+        s = s[:-1]
+    if s in GROCERY_BLACKLIST:
+        return ""
+    return s
+
+
+def _extract_quantity_unit_and_name(
+    name: str,
+    quantity: Optional[float],
+    unit: Optional[str],
+) -> tuple[str, Optional[float], Optional[str]]:
+    s = name.strip()
+    if not s:
+        return "", quantity, unit
+
+    if quantity is None:
+        m = re.match(r"^\s*(\d+(?:\.\d+)?|\d+\s+\d+/\d+|\d+/\d+)\s+(.*)$", s)
+        if m:
+            parsed = _parse_fractional_number(m.group(1))
+            if parsed is not None:
+                quantity = parsed
+                s = m.group(2).strip()
+
+    if unit is None:
+        parts = s.split()
+        if parts:
+            u = UNIT_ALIASES.get(parts[0].lower())
+            if u is not None:
+                unit = u
+                s = " ".join(parts[1:]).strip()
+
+    return _clean_grocery_name(s), quantity, _normalize_unit(unit)
+
+
+def _normalize_grocery_name(name: str) -> str:
+    s = name.strip().lower()
+    s = re.sub(r"[^a-z0-9\s]", "", s)
+    s = re.sub(r"\s+", " ", s).strip()
+    if s.endswith("s") and not s.endswith("ss"):
+        s = s[:-1]
+    return s
+
+
+def _normalize_unit(unit: Optional[str]) -> Optional[str]:
+    if unit is None:
+        return None
+    s = unit.strip().lower()
+    if not s:
+        return None
+    return UNIT_ALIASES.get(s, s)
+
+
+def _merge_grocery_items(items: List[GroceryItem]) -> List[GroceryItem]:
+    merged: Dict[str, GroceryItem] = {}
+    order: List[str] = []
+
+    for item in items:
+        key = _normalize_grocery_name(item.name)
+        if not key:
+            continue
+
+        if key not in merged:
+            merged[key] = GroceryItem(
+                name=item.name.strip(),
+                quantity=item.quantity,
+                unit=item.unit,
+                category=item.category,
+            )
+            order.append(key)
+            continue
+
+        current = merged[key]
+        current_unit = _normalize_unit(current.unit)
+        incoming_unit = _normalize_unit(item.unit)
+
+        # Prefer whichever non-empty unit/category we have.
+        if current.unit is None and item.unit is not None:
+            current.unit = item.unit
+        if current.category is None and item.category is not None:
+            current.category = item.category
+
+        # Merge quantities when units are compatible.
+        if current.quantity is not None and item.quantity is not None:
+            if current_unit == incoming_unit or current_unit is None or incoming_unit is None:
+                current.quantity = current.quantity + item.quantity
+                if current.unit is None and item.unit is not None:
+                    current.unit = item.unit
+            else:
+                # Conflicting units for the same ingredient; keep one line item
+                # but mark quantity/unit unknown instead of producing bad math.
+                current.quantity = None
+                current.unit = None
+        elif current.quantity is None and item.quantity is not None:
+            current.quantity = item.quantity
+            if current.unit is None and item.unit is not None:
+                current.unit = item.unit
+
+    return [merged[k] for k in order]
+
+
 def parse_grocery_list(raw: Dict[str, Any]) -> GroceryList:
     items_raw = raw.get("grocery_list", [])
     items: List[GroceryItem] = []
@@ -267,18 +542,23 @@ def parse_grocery_list(raw: Dict[str, Any]) -> GroceryList:
         name = str(item.get("name", "")).strip()
         if not name:
             continue
+        quantity = _parse_quantity(item.get("quantity"))
         unit_raw = item.get("unit")
+        unit = str(unit_raw).strip() if unit_raw not in (None, "", "null") else None
+        clean_name, quantity, unit = _extract_quantity_unit_and_name(name, quantity, unit)
+        if not clean_name:
+            continue
         category_raw = item.get("category")
         items.append(
             GroceryItem(
-                name=name,
-                quantity=_parse_quantity(item.get("quantity")),
-                unit=str(unit_raw).strip() if unit_raw not in (None, "", "null") else None,
+                name=clean_name,
+                quantity=quantity,
+                unit=unit,
                 category=str(category_raw).strip() if category_raw not in (None, "", "null") else None,
             )
         )
 
-    grocery = GroceryList(items=items)
+    grocery = GroceryList(items=_merge_grocery_items(items))
     if isinstance(raw.get("grocery_text"), str):
         grocery.text = raw.get("grocery_text")
     return grocery
@@ -366,9 +646,7 @@ def enforce_meal_slot_compatibility(
     return plan
 
 
-# ---------------------------------------------------------------------------
 # LLM client wrapper
-# ---------------------------------------------------------------------------
 
 def _default_openai_client() -> Callable[[str, str], str]:
     """Return a callable(system, user) -> response_text using Ollama locally."""
@@ -484,10 +762,6 @@ def _default_openai_client() -> Callable[[str, str], str]:
     return call
 
 
-# ---------------------------------------------------------------------------
-# MealPlanner class
-# ---------------------------------------------------------------------------
-
 class MealPlanner(Planner):
     """
     LLM-powered meal planner.
@@ -550,6 +824,48 @@ class MealPlanner(Planner):
             f"Failed to parse LLM response as JSON after retries. Response preview:\n{response_text[:1000]}"
         ) from parse_error
 
+    def _generate_grocery_from_plan(
+        self,
+        plan: MealPlan,
+        recipes_by_id: Dict[int, Recipe],
+    ) -> GroceryList:
+        base_prompt = fill_in_grocery_prompt(plan, recipes_by_id)
+        parse_error: Optional[Exception] = None
+        response_text = ""
+
+        for attempt in range(2):
+            if attempt == 0:
+                user_prompt = base_prompt
+            else:
+                user_prompt = (
+                    base_prompt
+                    + "\n\nIMPORTANT RETRY INSTRUCTION:\n"
+                    + "Your previous response was invalid or incomplete JSON. "
+                    + "Return one complete valid JSON object containing grocery_list only."
+                )
+
+            logger.info("Calling LLM for grocery estimation (attempt %s)…", attempt + 1)
+            response_text = self._llm(GROCERY_SYSTEM_PROMPT, user_prompt)
+            logger.debug("LLM grocery response:\n%s", response_text)
+
+            if not response_text or not response_text.strip():
+                parse_error = RuntimeError("LLM returned empty grocery response text")
+                continue
+
+            try:
+                raw = extract_json(response_text)
+                grocery = parse_grocery_list(raw)
+                if grocery.items:
+                    return grocery
+                parse_error = RuntimeError("LLM grocery response had empty grocery_list")
+            except Exception as e:
+                parse_error = e
+                continue
+
+        raise RuntimeError(
+            f"Failed to parse grocery response as JSON after retries. Response preview:\n{response_text[:1000]}"
+        ) from parse_error
+
     # --- public API ----------------------------------------------------------
 
     def generate_plan(
@@ -572,12 +888,30 @@ class MealPlanner(Planner):
         raw, recipes_by_id = self._generate_raw(profile, candidates, nutrition_targets)
         plan = parse_meal_plan(raw, recipes_by_id)
         plan = enforce_meal_slot_compatibility(plan, candidates)
-        grocery = parse_grocery_list(raw)
-        if not grocery.items:
-            # fallback keeps endpoint resilient if the model omits grocery_list
-            grocery_gen = SimpleGroceryGenerator()
-            grocery = grocery_gen.generate(plan, recipes_by_id)
+        grocery = GroceryList(items=[])
+        try:
+            grocery = self._generate_grocery_from_plan(plan, recipes_by_id)
+        except Exception:
+            logger.exception("Dedicated grocery LLM step failed; trying fallback sources")
+            grocery = parse_grocery_list(raw)
+            if not grocery.items:
+                # final fallback: keep ingredient names, but avoid meal-count units
+                grocery_gen = SimpleGroceryGenerator()
+                fallback = grocery_gen.generate(plan, recipes_by_id)
+                grocery = GroceryList(
+                    items=[
+                        GroceryItem(
+                            name=item.name,
+                            quantity=None,
+                            unit=None,
+                            category=item.category,
+                        )
+                        for item in fallback.items
+                    ]
+                )
         return plan, grocery
+
+
 
 
 # ---------------------------------------------------------------------------
@@ -667,5 +1001,16 @@ class MockMealPlanner(Planner):
             if c.recipe is not None
         }
         grocery_gen = SimpleGroceryGenerator()
-        grocery = grocery_gen.generate(plan, recipes_by_id)
+        fallback = grocery_gen.generate(plan, recipes_by_id)
+        grocery = GroceryList(
+            items=[
+                GroceryItem(
+                    name=item.name,
+                    quantity=None,
+                    unit=None,
+                    category=item.category,
+                )
+                for item in fallback.items
+            ]
+        )
         return plan, grocery
