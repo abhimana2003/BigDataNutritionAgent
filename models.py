@@ -1,12 +1,13 @@
-from sqlalchemy import Column, Integer, String, Float, ARRAY, JSON
+from sqlalchemy import Column, Integer, String, Float, ARRAY, JSON, ForeignKey
 from database import Base
-from sqlalchhemy.orm import relationship
+from sqlalchemy.orm import relationship
 
 
 class UserProfile(Base):
     __tablename__ = "user_profiles"
 
-    username = Column(String, primary_key=True, index=True)
+    id = Column(Integer, primary_key=True, index=True)
+    username = Column(String, unique=True, index=True)
     age = Column(Integer, nullable=False)
     height_feet = Column(Integer, nullable=False)
     height_inches = Column(Integer, nullable=False)
@@ -39,4 +40,5 @@ class Recipe(Base):
     timing = Column(JSON)
     dietary_tags = Column(JSON)
     estimated_cost = Column(Float)
+    username = Column(String, ForeignKey("user_profiles.username"))
     user = relationship("UserProfile", back_populates="recipes")

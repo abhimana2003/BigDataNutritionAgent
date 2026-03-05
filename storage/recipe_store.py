@@ -1,29 +1,46 @@
 from sqlalchemy.orm import Session
-from models import Recipe
-from database import SessionLocal
+from models import Recipe, UserProfile
 
 class RecipeStore:
-    def __init__(self):
-        self.db: Session = SessionLocal()
+    def __init__(self, db: Session):
+        self.db = db
 
-    def get_recipe(self, recipe_id: int):
-        return self.db.query(Recipe).filter(Recipe.id == recipe_id).first()
+    def get_user_profile(self, username: str):
+        return self.db.query(UserProfile).filter_by(username=username).first()
 
-    def search_recipes(self, max_calories=None, dietary_preferences=None, allergies=None, max_prep_time=None):
-        query = self.db.query(Recipe)
+  
+    def filter_recipes_for_user(self, username: str):
+        user = self.get_user_profile(username)
+        if not user:
+            raise ValueError("User not found")
+        
+        
 
-        if max_calories:
-            query = query.filter(Recipe.nutrition["calories"].as_float() <= max_calories)
+        query = self.db.query(Recipe).filter(Recipe.username == username)
 
-        if dietary_preferences:
-            for tag in dietary_preferences:
+        if user.goal == "weight_loss":
+            query = query.filter(Recipe.nutrition["calories"].as_float() <= 500)
+
+        if user.dietary_preferences:
+            for tag in user.dietary_preferences:
                 query = query.filter(Recipe.dietary_tags.contains([tag]))
 
-        if allergies:
-            for allergen in allergies:
+        if user.allergies:
+            for allergen in user.allergies:
                 query = query.filter(~Recipe.ingredients.contains([allergen]))
 
-        if max_prep_time:
-            query = query.filter(Recipe.prep_time <= max_prep_time)
+        if user.cooking_time:
+            query = query.filter(Recipe.prep_time <= user.cooking_time)
 
         return query.all()
+
+    def assign_recipes_to_user(self, username: str):
+        filtered_recipes = self.filter_recipes_for_user(username)
+
+        for recipe in filtered_recipes:
+            recipe.username = username
+
+        self.db.commit()
+
+    def get_user_recipes(self, username: str):
+        return self.db.query(Recipe).filter_by(username=username).all()

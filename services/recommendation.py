@@ -18,7 +18,7 @@ _embedding_index = EmbeddingIndex()
 
 def recommend_for_profile(
     db: Session,
-    user_id: int,
+    username: str,
     profile: UserProfileCreate,
     slot: MealSlot,
     targets: Optional[NutritionTargets] = None,
@@ -37,15 +37,15 @@ def recommend_for_profile(
     filtered_pairs = []
     for ar, sim in agent_recipes:
         filtered_pairs.append((ar, sim))
-    allowed_only = filter_allowed(profile_to_agent_profile(profile, user_id), [r for r, _ in filtered_pairs])
+    allowed_only = filter_allowed(profile_to_agent_profile(profile, username), [r for r, _ in filtered_pairs])
     allowed_set = {r.recipe_id for r in allowed_only}
     filtered_pairs = [(r, sim) for (r, sim) in filtered_pairs if r.recipe_id in allowed_set]
 
-    prefs = get_user_preferences(user_id)
+    prefs = get_user_preferences(username)
 
     candidates: List[RecipeCandidate] = []
     for r, sim in filtered_pairs:
-        s, reasons = score_recipe(profile_to_agent_profile(profile, user_id), r, prefs=prefs, slot=slot)
+        s, reasons = score_recipe(profile_to_agent_profile(profile, username), r, prefs=prefs, slot=slot)
 
         final_score = 0.6 * sim + 0.4 * s
 
@@ -65,10 +65,10 @@ def recommend_for_profile(
     return RecommendationResponse(candidates=candidates[:k])
 
 
-def profile_to_agent_profile(profile: UserProfileCreate, user_id: int):
+def profile_to_agent_profile(profile: UserProfileCreate, username: str):
     from agent.interfaces import UserProfile as AgentProfile
     return AgentProfile(
-        user_id=user_id,
+        user_id=username,
         age=profile.age,
         height_feet=profile.height_feet,
         height_inches=profile.height_inches,

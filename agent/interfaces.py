@@ -18,7 +18,9 @@ class UserProfile(BaseModel):
     This is what the recommender consumes.
     """
 
-    user_id: Optional[int] = None
+
+    id: Optional[int] = None
+    username: str
 
     age: int = Field(gt=0, lt=120)
     height_feet: int = Field(ge=1, le=8)
@@ -108,7 +110,7 @@ class UserPreferences(BaseModel):
 
 # Function Contracts
 def recommend(
-    user_id: int,
+    id: int,
     profile: UserProfile,
     slot: MealSlot,
     k: int = 10,

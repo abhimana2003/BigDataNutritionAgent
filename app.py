@@ -1,11 +1,11 @@
 import streamlit as st
 import requests
 from typing import List, Dict, Any
+from profile_editor import profile_form
 
 API_URL = "http://localhost:8000/profiles"
 
-# helpers 
-
+# Helper functions
 def fetch_profiles() -> List[Dict[str, Any]]:
     try:
         resp = requests.get(API_URL)
@@ -15,241 +15,230 @@ def fetch_profiles() -> List[Dict[str, Any]]:
         st.error(f"Unable to load profiles: {e}")
         return []
 
-
-def fetch_profile(profile_id: int) -> Dict[str, Any]:
+def fetch_profile(username: str) -> Dict[str, Any]:
     try:
-        resp = requests.get(f"{API_URL}/{profile_id}")
+        resp = requests.get(f"{API_URL}/{username}")
         resp.raise_for_status()
         return resp.json()
     except requests.RequestException:
         return {}
 
+# Profile Form
+def show_profile_form(prefilled_username=None) -> None:
+    st.title("Nutrition AI Agent — Profile Settings")
 
-def show_profile_form() -> None:
-    st.title("Nutrition AI Agent — Create/Update Profile")
+    username = prefilled_username or st.text_input("Username", key="profile_username")
 
-    profiles = fetch_profiles()
+    if not username:
+        st.info("Please enter a username")
+        return
+
     edit_id = None
-    if profiles:
-        opts = ["New profile"] + [f"{p['id']} - {p.get('age')}yo {p.get('gender')}" for p in profiles]
-        sel = st.selectbox("Select existing profile to edit", opts)
-        if sel != "New profile":
-            edit_id = int(sel.split(" ")[0])
+    existing = {}  
 
-    existing = fetch_profile(edit_id) if edit_id is not None else {}
-
-    # use existing values if present, otherwise defaults
     with st.form("profile_form"):
-        # use text inputs for numeric fields so that the boxes start empty
-        age = st.text_input("Age", value=str(existing.get("age", "")))
+        age = st.text_input("Age", value=str(existing.get("age", "")), key="age")
         st.subheader("Height")
         feet, inches = st.columns(2)
         with feet:
-            heightFt = st.text_input("Feet", value=str(existing.get("height_feet", "")))
+            heightFt = st.text_input("Feet", value=str(existing.get("height_feet", "")), key="height_feet")
         with inches:
-            heightIn = st.text_input("Height (inches)", value=str(existing.get("height_inches", "")))
-        weight = st.text_input("Weight (lbs)", value=str(existing.get("weight", "")))
+            heightIn = st.text_input("Height (inches)", value=str(existing.get("height_inches", "")), key="height_inches")
+        weight = st.text_input("Weight (lbs)", value=str(existing.get("weight", "")), key="weight")
+
         gender_opts = ["", "Female", "Male", "Other"]
-        gender = st.selectbox(
-            "Gender", gender_opts,
-            index=gender_opts.index(existing.get("gender", "")),
-            key=f"gender_{edit_id}",
-        )
-        goal_opts = ["", "weight_loss", "maintenance", "high_protein"]
-        goal = st.selectbox(
-            "Goal",
-            goal_opts,
-            format_func=lambda x: x.replace("_", " ").title() if x else "",
-            index=goal_opts.index(existing.get("goal", "")),
-            key=f"goal_{edit_id}",
-        )
-        # dietary/allergy/medical multiselects include an explicit "None"
-        # entry so a user without any restrictions can choose it.  When the
-        # form is submitted we convert "None" back to an empty list.
-        # keep the "None" choice available but do not preselect it when the
-        # profile is new; an empty list means no restrictions.
+        gender = st.selectbox("Gender", gender_opts,
+                              index=gender_opts.index(existing.get("gender", "")) if existing.get("gender") else 0,
+                              key="gender")
+
+        goal_opts = ["", "weight loss", "maintenance", "high protein"]
+        goal = st.selectbox("Goal", goal_opts,
+                            index=goal_opts.index(existing.get("goal", "")) if existing.get("goal") else 0,
+                            key="goal")
+
         dietary_opts = ["None", "Vegetarian", "Vegan", "Pescaterian", "Low Carb", "Keto"]
         allergies_opts = ["None", "Nuts", "Dairy", "Gluten", "Soy", "Eggs"]
         medical_opts = ["None", "Diabetes", "Hypertension", "Celiac", "High Cholesterol"]
 
-        dietary = st.multiselect(
-            "Dietary Preferences",
-            dietary_opts,
-            default=existing.get("dietary_preferences", []),
-            key=f"dietary_{edit_id}",
-        )
-        allergies = st.multiselect(
-            "Allergies", allergies_opts, default=existing.get("allergies", []),
-            key=f"allergies_{edit_id}",
-        )
-        medical = st.multiselect(
-            "Medical Conditions",
-            medical_opts,
-            default=existing.get("medical_conditions", []),
-            key=f"medical_{edit_id}",
-        )
+        dietary = st.multiselect("Dietary Preferences", dietary_opts,
+                                 default=existing.get("dietary_preferences", []), key="dietary")
+        allergies = st.multiselect("Allergies", allergies_opts,
+                                   default=existing.get("allergies", []), key="allergies")
+        medical = st.multiselect("Medical Conditions", medical_opts,
+                                 default=existing.get("medical_conditions", []), key="medical")
 
-        # display meaningful labels for budget and cooking time while still
-        # storing the canonical low/medium/high values in the database
-        budget_values = ["", "low", "medium", "high"]
-        # updated ranges to reflect larger weekly budgets
-        budget_labels = {"low": "$0-200", "medium": "$200-400", "high": "$400-600"}
-        current_budget = existing.get("budget_level", "")
-        if current_budget not in budget_values:
-            current_budget = ""
-        budget = st.selectbox(
-            "Weekly Grocery Budget",
-            budget_values,
-            format_func=lambda x: budget_labels.get(x, x.title()),
-            index=budget_values.index(current_budget),
-            key=f"budget_{edit_id}",
-        )
+        # Budget input as float
+        budget = st.number_input("Weekly Grocery Budget ($)",
+                                 min_value=0.0,
+                                 max_value=10000.0,
+                                 value=float(existing.get("budget_level", 0) or 0),
+                                 step=1.0,
+                                 format="%.2f",
+                                 key="budget")
 
-        cook_values = ["", "short", "medium", "long"]
-        cook_labels = {"short": "<30 min", "medium": "30-60 min", "long": ">60 min"}
-        current_cook = existing.get("cooking_time", "")
-        if current_cook not in cook_values:
-            current_cook = ""
-        cooking_time = st.selectbox(
-            "Cooking Time",
-            cook_values,
-            format_func=lambda x: cook_labels.get(x, x.title()),
-            index=cook_values.index(current_cook),
-            key=f"cooking_{edit_id}",
-        )
+        cook_opts = ["", "short (<30 mins)", "medium (30-60 min)", "long (>60 mins)"]
+        cooking_time = st.selectbox("Cooking Time", cook_opts,
+                                    index=cook_opts.index(existing.get("cooking_time", "")) if existing.get("cooking_time") else 0,
+                                    key="cooking_time")
 
         submitted = st.form_submit_button("Submit Profile")
 
     if submitted:
-        # convert any "None" selections back into empty lists before sending
         def clean_list(lst):
             if not lst or "None" in lst:
                 return []
             return lst
 
-        # convert numeric strings, allow blank -> 0 or None if desired
-        def to_int(s, default=None):
-            try:
-                return int(s)
-            except Exception:
-                return default
-
-        def to_float(s, default=None):
-            try:
-                return float(s)
-            except Exception:
-                return default
-
         payload = {
-            "age": to_int(age),
-            "height_feet": to_int(heightFt),
-            "height_inches": to_int(heightIn),
-            "weight": to_float(weight),
-            "gender": gender or None,
+            "username": username,
+            "age": int(age) if age else None,
+            "height_feet": int(heightFt) if heightFt else None,
+            "height_inches": int(heightIn) if heightIn else None,
+            "weight": float(weight) if weight else None,
+            "gender": gender.lower() if gender else None,
             "goal": goal or None,
             "dietary_preferences": clean_list(dietary),
             "allergies": clean_list(allergies),
             "medical_conditions": clean_list(medical),
-            "budget_level": budget,
-            "cooking_time": cooking_time,
+            "budget_level": float(budget),
+            "cooking_time": cooking_time or None,
         }
+
         try:
             if edit_id is not None:
                 r = requests.put(f"{API_URL}/{edit_id}", json=payload)
             else:
                 r = requests.post(API_URL, json=payload)
             r.raise_for_status()
-            msg = "updated" if edit_id is not None else "saved"
-            st.success(f"Profile {msg} successfully!")
+            st.success("Profile successfully created!")
+
+            # Set session state to show tabs after creation
+            st.session_state["logged_in_user"] = username
+            st.session_state["creating_profile"] = False
+            st.session_state["active_page"] = "Meal Plan"
+            st.rerun()
+
         except requests.exceptions.HTTPError as e:
             st.error(f"Failed to save profile: {e} - {r.text}")
 
+# Login Page
+def show_login_page():
+    st.title("Nutrition AI Agent Login")
+    username = st.text_input("Username", key="login_username")
+    col1, col2 = st.columns(2)
 
+    with col1:
+        if st.button("Log In"):
+            try:
+                res = requests.get(f"{API_URL}/{username}")
+                if res.status_code == 200:
+                    st.session_state["logged_in_user"] = username
+                    st.session_state["active_page"] = "Meal Plan"
+                    st.success("Logged in successfully!")
+                    st.rerun()
+                else:
+                    st.error("User not found")
+            except requests.RequestException:
+                st.error("Server error")
+
+    with col2:
+        if st.button("Create New Profile"):
+            st.session_state["creating_profile"] = True
+            st.session_state["new_username"] = username
+            st.rerun()
+
+# Meal Plan Page
 def show_mealplan_page() -> None:
     st.title("Nutrition AI Agent — Meal Plan")
 
-    profiles = fetch_profiles()
-    if not profiles:
-        st.info("No profiles available. Please create one first.")
+    username = st.session_state.get("logged_in_user")
+    if not username:
+        st.info("Please log in first")
         return
-
-    # display select box with id and maybe age/goal
-    options = [f"{p['id']} - {p.get('age')}yo {p.get('gender')}" for p in profiles]
-    choice = st.selectbox("Choose profile", options)
-    profile_id = int(choice.split(" ")[0])
 
     if st.button("Generate meal plan"):
         try:
-            resp = requests.get(f"{API_URL}/{profile_id}/mealplan")
+            resp = requests.get(f"{API_URL}/{username}/mealplan")
             resp.raise_for_status()
             data = resp.json()
-            # cache the last generated mealplan so the Grocery tab can show it
             st.session_state["last_mealplan"] = data
             display_mealplan(data)
         except requests.RequestException as e:
             st.error(f"Failed to generate meal plan: {e}")
 
-
 def display_mealplan(data: Dict[str, Any]) -> None:
     st.subheader("7‑Day Meal Plan")
-    days = data.get("days", [])
-    for day in days:
+    for day in data.get("days", []):
         st.markdown(f"**Day {day.get('day')}**")
-        meals = day.get("meals", [])
-        for m in meals:
+        for m in day.get("meals", []):
             st.write(f"- {m.get('meal_type').capitalize()}: {m.get('title')}")
 
-
-# use streamlit's native tabs for clean horizontal navigation
-tab1, tab2, tab3 = st.tabs(["Create/Update Profile", "Meal Plan", "Grocery List"])
-
-with tab1:
-    show_profile_form()
-
-with tab2:
-    show_mealplan_page()
-
-with tab3:
-    # Grocery list tab: show last generated grocery or allow to fetch by profile
-    def show_grocery_page() -> None:
-        st.title("Nutrition AI Agent — Grocery List")
-
-        # prefer existing session cached mealplan
-        gp = st.session_state.get("last_mealplan")
-        if gp:
-            st.info("Showing grocery list from last generated meal plan")
-            grocery = gp.get("grocery_list", [])
-            text = gp.get("grocery_text")
-            if text:
-                # if the API provided a pre-formatted list, show that instead
-                st.markdown(text)
-                return
-            if not grocery:
-                st.write("No grocery items in last meal plan.")
-                return
-            for item in grocery:
-                name = item.get("name")
-                quantity = item.get("quantity")
-                unit = item.get("unit")
-                parts = []
-
-                if quantity is not None:
-                    if isinstance(quantity, (int, float)) and float(quantity).is_integer():
-                        parts.append(str(int(quantity)))
-                    else:
-                        parts.append(str(quantity))
-
-                if unit:
-                    parts.append(str(unit))
-
-                if name:
-                    parts.append(str(name))
-
-                if parts:
-                    st.write(f"- {' '.join(parts)}")
-            return
-
-        st.info("No generated meal plan cached. Go to the 'Meal Plan' tab and click 'Generate meal plan' to populate the grocery list.")
+# Grocery Page
+def show_grocery_page() -> None:
+    st.title("Nutrition AI Agent — Grocery List")
+    gp = st.session_state.get("last_mealplan")
+    if not gp:
+        st.info("No generated meal plan cached. Go to the 'Meal Plan' tab and click 'Generate meal plan'.")
         return
+    grocery = gp.get("grocery_list", [])
+    text = gp.get("grocery_text")
+    if text:
+        st.markdown(text)
+        return
+    if not grocery:
+        st.write("No grocery items in last meal plan.")
+        return
+    for item in grocery:
+        name = item.get("name")
+        quantity = item.get("quantity")
+        unit = item.get("unit")
+        parts = []
+        if quantity is not None:
+            parts.append(str(int(quantity)) if isinstance(quantity, float) and quantity.is_integer() else str(quantity))
+        if unit:
+            parts.append(str(unit))
+        if name:
+            parts.append(str(name))
+        if parts:
+            st.write(f"- {' '.join(parts)}")
 
-    show_grocery_page()
+# main app flow
+if "logged_in_user" not in st.session_state:
+    st.session_state["logged_in_user"] = None
+if "creating_profile" not in st.session_state:
+    st.session_state["creating_profile"] = False
+if "new_username" not in st.session_state:
+    st.session_state["new_username"] = None
+if "show_tabs" not in st.session_state:
+    st.session_state["show_tabs"] = False  # controls whether to show the 3 tabs
+
+# If user not logged in or creating profile, show login/profile page
+if not st.session_state["logged_in_user"] or st.session_state["creating_profile"]:
+    if st.session_state["creating_profile"]:
+        show_profile_form(prefilled_username=st.session_state["new_username"])
+    else:
+        show_login_page()
+else:
+    # User is logged in and not creating profile: show tabs
+    st.session_state["show_tabs"] = True
+
+if st.session_state.get("show_tabs"):
+    # Navigation control
+    if "active_page" not in st.session_state:
+        st.session_state["active_page"] = "Meal Plan"
+
+    page = st.radio(
+        "Navigation",
+        ["Profile Settings", "Meal Plan", "Grocery List"],
+        index=["Profile Settings", "Meal Plan", "Grocery List"].index(st.session_state["active_page"]),
+        horizontal=True
+    )
+    
+    st.session_state["active_page"] = page
+
+    if page == "Profile Settings":
+        profile_form(prefilled_username=st.session_state.get("logged_in_user"))
+    elif page == "Meal Plan":
+        show_mealplan_page()
+    elif page == "Grocery List":
+        show_grocery_page()

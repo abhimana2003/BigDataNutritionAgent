@@ -1,11 +1,12 @@
 from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Union
 from enum import Enum
+from agent.interfaces import Recipe
 
 class GoalType(str, Enum):
-    weight_loss = "weight_loss"
+    weight_loss = "weight loss"
     maintenance = "maintenance"
-    high_protein = "high_protein"
+    high_protein = "high protein"
 
 class MealType(str, Enum):
     breakfast = "breakfast"
@@ -19,13 +20,14 @@ class BudgetLevel(str, Enum):
     high = "high"
 
 class CookingTimeLevel(str, Enum):
-    short = "short"
-    medium = "medium"
-    long = "long"
+    short = "short (<30 mins)"
+    medium = "medium (30-60 min)"
+    long = "long (>60 mins)"
 
 #user profile / existing 
 
 class UserProfileCreate(BaseModel):
+    username: str
     age: int = Field(gt=0, lt=120)
     height_feet: int = Field(ge=1, le=8)
     height_inches: int = Field(ge=0, le=11)
@@ -37,7 +39,7 @@ class UserProfileCreate(BaseModel):
     allergies: List[str] = []
     medical_conditions: List[str] = []
 
-    budget_level: BudgetLevel
+    budget_level: Optional[float]
     cooking_time: CookingTimeLevel
 
 # nutrition layer outputs 
@@ -77,9 +79,10 @@ class RecipeCandidate(BaseModel):
     nutrition_fit_score: Optional[float] = None
     time_fit_score: Optional[float] = None
     budget_fit_score: Optional[float] = None
+    recipe: Optional[Recipe] = None
 
 class RecommendationRequest(BaseModel):
-    profile_id: int
+    username: str
     slot: MealSlot
     k: int = 10
 
@@ -101,7 +104,8 @@ class DayPlan(BaseModel):
     daily_totals: Optional[NutritionTargets]
 
 class MealPlanResponse(BaseModel):
-    profile_id: int
+    #profile_id: int
+    username: str
     days: List[DayPlan] = []
     weekly_totals: Optional[NutritionTargets]
     grocery_list: Optional[List["GroceryItem"]]
@@ -124,13 +128,13 @@ class GroceryList(BaseModel):
 # feedback / preference 
 
 class FeedbackEvent(BaseModel):
-    user_id: int
+    username: str
     recipe_id: int
     action: str  # "like" | "dislike"
     timestamp: Optional[str] = None
 
 class FeedbackRequest(BaseModel):
-    user_id: int
+    username: str
     recipe_id: int
     action: str
 
@@ -148,7 +152,7 @@ MealPlanResponse.update_forward_refs()
 
 class UserProfile(BaseModel):
     id: int
-
+    username: str
     age: int
     height_feet: int
     height_inches: int
@@ -160,7 +164,7 @@ class UserProfile(BaseModel):
     allergies: List[str] = []
     medical_conditions: List[str] = []
 
-    budget_level: BudgetLevel
+    budget_level: Optional[float]
     cooking_time: CookingTimeLevel
 
     class Config:

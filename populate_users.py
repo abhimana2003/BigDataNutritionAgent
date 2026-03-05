@@ -1,6 +1,7 @@
 import random
 from database import SessionLocal, Base, engine
 from models import UserProfile, Recipe
+import string
 
 Base.metadata.create_all(bind=engine)
 
@@ -12,7 +13,7 @@ MEDICAL_CONDITIONS = ["diabetes", "hypertension", "celiac", "high cholesterol"]
 BUDGET_LEVELS = ["low", "medium", "high"]
 COOKING_TIMES = ["short (<30 mins)", "medium (30-60 min)", "long(>60 mins)"]
 
-NUM_USERS = 20  
+NUM_USERS = 10  
 
 def random_subset(options):
     return random.sample(options, k=random.randint(0, len(options)))
@@ -20,7 +21,7 @@ def random_subset(options):
 def random_user_profile():
     return {
         "age": random.randint(18, 70),
-        "height_inches": round(random.uniform(0, 11), 1),
+        "height_inches": round(random.randint(0, 11), 1),
         "height_feet": random.randint(3, 7),
         "weight": round(random.uniform(40, 1000), 1),
         "gender": random.choice(GENDERS),
@@ -32,32 +33,27 @@ def random_user_profile():
         "cooking_time": random.choice(COOKING_TIMES),
     }
 
+def generate_username(existing_usernames):
+    while True:
+        username = "user_" + ''.join(random.choices(string.ascii_lowercase, k=5))
+        if username not in existing_usernames:
+            return username
 
 def populate_users(num_users=NUM_USERS):
     db = SessionLocal()
 
-    existing = db.query(UserProfile).count()
-    if existing > 0:
-        print(f"UserProfile table already has {existing} rows. Skipping population.")
-        db.close()
-        return
+    existing_usernames = {user.username for user in db.query(UserProfile.username).all()}
 
-    user_objects = []
-    all_recipes = db.query(Recipe).all()  
     for _ in range(num_users):
         profile_data = random_user_profile()
-        user = UserProfile(**profile_data)
+        username = generate_username(existing_usernames)
+        user = UserProfile(username=username, **profile_data)
 
-        if all_recipes:
-            user.favorite_recipes = random.sample(all_recipes, k=min(3, len(all_recipes)))
-
-        user_objects.append(user)
-
-    db.bulk_save_objects(user_objects)
+        db.add(user)
+        existing_usernames.add(username)
+    
     db.commit()
     db.close()
-    print(f"Populated {len(user_objects)} random users.")
-
 
 if __name__ == "__main__":
     populate_users()

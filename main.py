@@ -2,6 +2,7 @@ from fastapi import FastAPI, Depends, HTTPException
 from sqlalchemy.orm import Session
 from database import SessionLocal
 import crud, schemas
+import models
 
 app = FastAPI(title="Nutrition AI User Profiling API")
 
@@ -12,36 +13,67 @@ def get_db():
     finally:
         db.close()
 
-@app.post("/profiles", response_model=schemas.UserProfile)
-def create_profile(profile: schemas.UserProfileCreate, db: Session = Depends(get_db)):
-    return crud.create_user_profile(db, profile)
-
 @app.get("/profiles", response_model=list[schemas.UserProfile])
 def list_profiles(db: Session = Depends(get_db)):
     return crud.get_user_profiles(db)
 
-@app.get("/profiles/{profile_id}", response_model=schemas.UserProfile)
-def get_profile(profile_id: int, db: Session = Depends(get_db)):
-    db_profile = crud.get_user_profile(db, profile_id)
-    if db_profile is None:
-        raise HTTPException(status_code=404, detail="Profile not found")
-    return db_profile
+@app.put("/profiles/{username}", response_model=schemas.UserProfile)
+def upsert_profile(username: str, profile: schemas.UserProfileCreate, db: Session = Depends(get_db)):
+    if username != profile.username:
+        raise HTTPException(status_code=400, detail="Username mismatch")
+    return crud.upsert_user_profile(db, username, profile)
 
-@app.put("/profiles/{profile_id}", response_model=schemas.UserProfile)
-def update_profile(profile_id: int, profile: schemas.UserProfileCreate, db: Session = Depends(get_db)):
-    db_profile = crud.update_user_profile(db, profile_id, profile)
-    if db_profile is None:
-        raise HTTPException(status_code=404, detail="Profile not found")
-    return db_profile
+@app.get("/profiles/{username}", response_model=schemas.UserProfile)
+def get_profile(username: str, db: Session = Depends(get_db)):
+    user = crud.get_user_by_username(db, username)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    return user
+
+@app.post("/profiles", response_model=schemas.UserProfile)
+def create_profile(profile: schemas.UserProfileCreate, db: Session=Depends(get_db)):
+    return crud.upsert_user_profile(db, profile.username, profile)
 
 
-@app.get("/profiles/{profile_id}/mealplan", response_model=schemas.MealPlanResponse)
-def generate_mealplan(profile_id: int, db: Session = Depends(get_db)):
-    db_profile = crud.get_user_profile(db, profile_id)
+#@app.put("/profiles/{username}", response_model=schemas.UserProfile)
+#def update_profile(username: str, profile: schemas.UserProfileCreate, db: Session=Depends(get_db)):
+ #   db_profile = crud.update_user_profile_by_username(db, username, profile)
+ #   if db_profile is None:
+ #       raise HTTPException(status_code=404, detail="User not found")
+ #   return db_profile
+
+
+#@app.get("/profiles/{profile_id}", response_model=schemas.UserProfile)
+#def get_profile(profile_id: int, db: Session = Depends(get_db)):
+#    db_profile = crud.get_user_profile(db, profile_id)
+#    if db_profile is None:
+#        raise HTTPException(status_code=404, detail="Profile not found")
+#    return db_profile
+
+#@app.put("/profiles/{profile_id}", response_model=schemas.UserProfile)
+#def update_profile(profile_id: int, profile: schemas.UserProfileCreate, db: Session = Depends(get_db)):
+#    db_profile = crud.update_user_profile(db, profile_id, profile)
+#    if db_profile is None:
+#        raise HTTPException(status_code=404, detail="Profile not found")
+#    return db_profile
+
+#@app.put("/profiles/{username}", response_model=schemas.UserProfile)
+#def update_profile(username: str, profile: schemas.UserProfileCreate, db: Session = Depends(get_db)):
+#    db_profile = crud.update_user_profile_by_username(db, username, profile)
+#    if db_profile is None:
+#        raise HTTPException(status_code=404, detail="User not found")
+#    return db_profile
+
+
+@app.get("/profiles/{username}/mealplan", response_model=schemas.MealPlanResponse)
+def generate_mealplan(username: str, db: Session = Depends(get_db)):
+    db_profile = crud.get_user_by_username(db, username)
     if db_profile is None:
         raise HTTPException(status_code=404, detail="Profile not found")
 
     profile_create = schemas.UserProfileCreate(
+        id = db_profile.id,
+        username = db_profile.username,
         age=db_profile.age,
         height_feet=db_profile.height_feet,
         height_inches=db_profile.height_inches,
@@ -67,7 +99,8 @@ def generate_mealplan(profile_id: int, db: Session = Depends(get_db)):
 
     from agent.interfaces import UserProfile as AgentProfile, MealSlot
     agent_profile = AgentProfile(
-        user_id=profile_id,
+        id=db_profile.id,
+        username=db_profile.username,
         age=db_profile.age,
         height_feet=db_profile.height_feet,
         height_inches=db_profile.height_inches,
@@ -183,7 +216,8 @@ def generate_mealplan(profile_id: int, db: Session = Depends(get_db)):
     grocery_text = getattr(grocery, "text", None)
 
     return schemas.MealPlanResponse(
-        profile_id=profile_id,
+        #profile_id=profile_id,
+        username=username,
         days=days_out,
         weekly_totals=schemas.NutritionTargets(
             daily_calories=total_cals,

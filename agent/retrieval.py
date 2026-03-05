@@ -24,7 +24,7 @@ class RecommenderRetriever(Retriever):
         from agent.recommender import recommend
 
         return recommend(
-            user_id=profile.user_id or 0,
+            user_id=profile.id or 0,
             profile=profile,
             slot=slot,
             k=k,
