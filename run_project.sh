@@ -65,6 +65,22 @@ END
 \$do\$;
 EOF
 
+echo "Applying schema migration for account fields"
+psql nutrition_ai <<EOF
+ALTER TABLE IF EXISTS user_profiles ADD COLUMN IF NOT EXISTS username VARCHAR;
+ALTER TABLE IF EXISTS user_profiles ADD COLUMN IF NOT EXISTS email VARCHAR;
+ALTER TABLE IF EXISTS user_profiles ADD COLUMN IF NOT EXISTS full_name VARCHAR;
+ALTER TABLE IF EXISTS user_profiles ADD COLUMN IF NOT EXISTS password_hash VARCHAR;
+ALTER TABLE IF EXISTS user_profiles ADD COLUMN IF NOT EXISTS password_salt VARCHAR;
+UPDATE user_profiles SET username = 'user_' || id WHERE username IS NULL OR username = '';
+UPDATE user_profiles SET goal = 'maintenance' WHERE goal IS NULL OR goal NOT IN ('weight loss', 'maintenance', 'high protein');
+UPDATE user_profiles SET cooking_time = 'medium (30-60 min)' WHERE cooking_time IS NULL OR cooking_time NOT IN ('short (<30 mins)', 'medium (30-60 min)', 'long (>60 mins)');
+CREATE UNIQUE INDEX IF NOT EXISTS ix_user_profiles_username ON user_profiles (username);
+ALTER TABLE IF EXISTS user_profiles ALTER COLUMN username SET NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS ix_user_profiles_email ON user_profiles (email);
+ALTER TABLE IF EXISTS recipes ADD COLUMN IF NOT EXISTS username VARCHAR;
+EOF
+
 
 echo "Clearing port 8000"
 
@@ -75,6 +91,7 @@ elif command -v fuser >/dev/null 2>&1; then
 fi
 
 echo "Initializing database"
+python3 init_db.py
 python3 populate_users.py
 python3 pipelines/ingest_recipes.py
 

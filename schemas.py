@@ -28,6 +28,9 @@ class CookingTimeLevel(str, Enum):
 
 class UserProfileCreate(BaseModel):
     username: str
+    email: Optional[str] = None
+    full_name: Optional[str] = None
+    password: Optional[str] = None
     age: int = Field(gt=0, lt=120)
     height_feet: int = Field(ge=1, le=8)
     height_inches: int = Field(ge=0, le=11)
@@ -39,7 +42,7 @@ class UserProfileCreate(BaseModel):
     allergies: List[str] = []
     medical_conditions: List[str] = []
 
-    budget_level: Optional[float]
+    budget_level: Optional[Union[float, str]] = None
     cooking_time: CookingTimeLevel
 
 # nutrition layer outputs 
@@ -153,6 +156,8 @@ MealPlanResponse.update_forward_refs()
 class UserProfile(BaseModel):
     id: int
     username: str
+    email: Optional[str] = None
+    full_name: Optional[str] = None
     age: int
     height_feet: int
     height_inches: int
@@ -164,8 +169,44 @@ class UserProfile(BaseModel):
     allergies: List[str] = []
     medical_conditions: List[str] = []
 
-    budget_level: Optional[float]
+    budget_level: Optional[Union[float, str]] = None
     cooking_time: CookingTimeLevel
 
     class Config:
         from_attributes = True  # for SQLAlchemy -> Pydantic
+
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+
+class LoginResponse(BaseModel):
+    ok: bool
+    username: str
+    full_name: Optional[str] = None
+
+
+class RecipeDetailResponse(BaseModel):
+    recipe_id: int
+    title: str
+    ingredients: List[str] = []
+    directions: List[str] = []
+    image_url: Optional[str] = None
+    prep_time: Optional[int] = None
+    cook_time: Optional[int] = None
+    total_time: Optional[int] = None
+    servings: Optional[int] = None
+    url: Optional[str] = None
+
+
+class ReplaceMealRequest(BaseModel):
+    day: int = Field(ge=1, le=7)
+    meal_type: MealType
+    current_recipe_id: int
+    exclude_recipe_ids: List[int] = []
+
+
+class ReplaceMealResponse(BaseModel):
+    ok: bool
+    meal: PlannedMeal

@@ -1,7 +1,7 @@
 # profile_editor.py
 import streamlit as st
 import requests
-from typing import Dict, Any
+from typing import Dict, Any, List
 
 API_URL = "http://localhost:8000/profiles"
 
@@ -25,6 +25,12 @@ def profile_form(prefilled_username: str = None) -> None:
                 existing = resp.json()
         except requests.RequestException:
             st.warning("Could not fetch existing profile data")
+
+    existing_budget = existing.get("budget_level", 0)
+    try:
+        budget_default = float(existing_budget or 0)
+    except (TypeError, ValueError):
+        budget_default = 0.0
 
     with st.form("profile_form"):
         age = st.text_input("Age", value=str(existing.get("age", "")), key="age")
@@ -61,7 +67,7 @@ def profile_form(prefilled_username: str = None) -> None:
         budget = st.number_input("Weekly Grocery Budget ($)",
                                  min_value=0.0,
                                  max_value=10000.0,
-                                 value=float(existing.get("budget_level", 0) or 0),
+                                 value=budget_default,
                                  step=1.0,
                                  format="%.2f",
                                  key="budget")
@@ -74,6 +80,56 @@ def profile_form(prefilled_username: str = None) -> None:
         submitted = st.form_submit_button("Submit Profile")
 
     if submitted:
+        errors: List[str] = []
+
+        def parse_int(name: str, raw: str, min_val: int, max_val: int):
+            value = (raw or "").strip()
+            if not value:
+                errors.append(f"{name} is required.")
+                return None
+            try:
+                parsed = int(value)
+            except ValueError:
+                errors.append(f"{name} must be a whole number.")
+                return None
+            if parsed < min_val or parsed > max_val:
+                errors.append(f"{name} must be between {min_val} and {max_val}.")
+                return None
+            return parsed
+
+        def parse_float(name: str, raw: str, min_val: float, max_val: float):
+            value = (raw or "").strip()
+            if not value:
+                errors.append(f"{name} is required.")
+                return None
+            try:
+                parsed = float(value)
+            except ValueError:
+                errors.append(f"{name} must be a number.")
+                return None
+            if parsed < min_val or parsed > max_val:
+                errors.append(f"{name} must be between {min_val} and {max_val}.")
+                return None
+            return parsed
+
+        age_value = parse_int("Age", age, 1, 119)
+        height_ft_value = parse_int("Height (feet)", heightFt, 1, 8)
+        height_in_value = parse_int("Height (inches)", heightIn, 0, 11)
+        weight_value = parse_float("Weight", weight, 40.0, 1000.0)
+
+        if not gender:
+            errors.append("Please select a gender.")
+        if not goal:
+            errors.append("Please select a goal.")
+        if not cooking_time:
+            errors.append("Please select a cooking time.")
+
+        if errors:
+            st.error("Please fix these fields before submitting:")
+            for msg in errors:
+                st.write(f"- {msg}")
+            return
+
         def clean_list(lst):
             if not lst or "None" in lst:
                 return []
@@ -81,10 +137,10 @@ def profile_form(prefilled_username: str = None) -> None:
 
         payload = {
             "username": username,
-            "age": int(age) if age else None,
-            "height_feet": int(heightFt) if heightFt else None,
-            "height_inches": int(heightIn) if heightIn else None,
-            "weight": float(weight) if weight else None,
+            "age": age_value,
+            "height_feet": height_ft_value,
+            "height_inches": height_in_value,
+            "weight": weight_value,
             "gender": gender.lower() if gender else None,
             "goal": goal or None,
             "dietary_preferences": clean_list(dietary),
@@ -102,7 +158,7 @@ def profile_form(prefilled_username: str = None) -> None:
             r.raise_for_status()
             st.success("Profile saved successfully!")
             st.session_state["logged_in_user"] = username
-            st.session_state["active_page"] = "Meal Plan"
+            st.session_state["active_page"] = "meal"
             st.rerun()
         except requests.exceptions.HTTPError as e:
             st.error(f"Failed to save profile: {e} - {r.text}")

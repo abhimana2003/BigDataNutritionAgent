@@ -1,0 +1,26 @@
+:root {
+  --bg: #f5efe3;
+  --text: #5b3f2a;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: "Playfair Display", Georgia, serif;
+}
+
+.page {
+  padding: 40px 48px;
+}
+
+h1 {
+  margin: 0;
+  font-size: clamp(2rem, 5vw, 3.5rem);
+  font-weight: 700;
+  line-height: 1.1;
+}

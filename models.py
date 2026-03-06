@@ -7,7 +7,11 @@ class UserProfile(Base):
     __tablename__ = "user_profiles"
 
     id = Column(Integer, primary_key=True, index=True)
-    username = Column(String, unique=True, index=True)
+    username = Column(String, unique=True, index=True, nullable=False)
+    email = Column(String, unique=True, index=True, nullable=True)
+    full_name = Column(String, nullable=True)
+    password_hash = Column(String, nullable=True)
+    password_salt = Column(String, nullable=True)
     age = Column(Integer, nullable=False)
     height_feet = Column(Integer, nullable=False)
     height_inches = Column(Integer, nullable=False)

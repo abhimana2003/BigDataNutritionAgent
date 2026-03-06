@@ -1,17 +1,18 @@
 import random
 from database import SessionLocal, Base, engine
 from models import UserProfile, Recipe
+from auth_utils import hash_password
 import string
 
 Base.metadata.create_all(bind=engine)
 
 GENDERS = ["female", "male", "other"]
-GOALS = ["weight loss", "maintenance", "high protein", "gluten free"]
+GOALS = ["weight loss", "maintenance", "high protein"]
 DIETARY_OPTIONS = ["vegetarian", "vegan", "pescaterian", "low carb", "keto"]
 ALLERGIES = ["nuts", "dairy", "gluten", "soy", "eggs"]
 MEDICAL_CONDITIONS = ["diabetes", "hypertension", "celiac", "high cholesterol"]
 BUDGET_LEVELS = ["low", "medium", "high"]
-COOKING_TIMES = ["short (<30 mins)", "medium (30-60 min)", "long(>60 mins)"]
+COOKING_TIMES = ["short (<30 mins)", "medium (30-60 min)", "long (>60 mins)"]
 
 NUM_USERS = 10  
 
@@ -47,7 +48,15 @@ def populate_users(num_users=NUM_USERS):
     for _ in range(num_users):
         profile_data = random_user_profile()
         username = generate_username(existing_usernames)
-        user = UserProfile(username=username, **profile_data)
+        salt, digest = hash_password("password123")
+        user = UserProfile(
+            username=username,
+            email=f"{username}@example.com",
+            full_name=username.replace("_", " ").title(),
+            password_salt=salt,
+            password_hash=digest,
+            **profile_data,
+        )
 
         db.add(user)
         existing_usernames.add(username)
