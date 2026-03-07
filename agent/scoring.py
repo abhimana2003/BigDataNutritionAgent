@@ -266,7 +266,11 @@ def preference_score(profile: UserProfile, recipe: Recipe, prefs: UserPreference
     reasons: List[str] = []
     s = 0.0
 
-    if recipe.recipe_id in 
+    if recipe.recipe_id in prefs.disliked_recipes_ids:
+        return -6.0, ["you previously disliked this recipe"]
+    
+    if recipe.recipe_id in prefs.liked_recipes_ids:
+        return 3.0, ["you previously liked this recipe"]
 
     # cuisine
     if recipe.cuisine:

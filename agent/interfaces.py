@@ -41,6 +41,7 @@ class UserProfile(BaseModel):
     disliked_ingredients: List[str] = []
 
 
+
 # Meal Slot
 class MealSlot(BaseModel):
     """
@@ -106,6 +107,10 @@ class UserPreferences(BaseModel):
     tag_weights: Dict[str, float] = {}
     ingredient_weights: Dict[str, float] = {}
     cuisine_weights: Dict[str, float] = {}
+
+    liked_recipes_ids: List[int] = []
+    disliked_recipes_ids: List[int] = []
+    disliked_ingredients: List[str] = []
 
 
 # Function Contracts

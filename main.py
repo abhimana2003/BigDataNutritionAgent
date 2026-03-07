@@ -189,6 +189,9 @@ def submit_feedback(username: str, req: schemas.FeedbackRequest, db: Session = D
     agent_recipe = orm_to_agent_recipe(recipe)
     record_feedback(user.id, agent_recipe, action)
     prefs = get_user_preferences(user.id)
+
+    print(f"Feedback: user={username}, recipe={recipe.id}, action={action}")
+    
     return schemas.FeedbackResponse(
         ok=True,
         updated_preferences={
@@ -197,6 +200,8 @@ def submit_feedback(username: str, req: schemas.FeedbackRequest, db: Session = D
             "preferred_ingredients": prefs.ingredient_weights,
         },
     )
+
+
 
 
 @app.post("/profiles/{username}/replace-meal", response_model=schemas.ReplaceMealResponse)
