@@ -266,6 +266,8 @@ def preference_score(profile: UserProfile, recipe: Recipe, prefs: UserPreference
     reasons: List[str] = []
     s = 0.0
 
+    if recipe.recipe_id in 
+
     # cuisine
     if recipe.cuisine:
         w = prefs.cuisine_weights.get(recipe.cuisine.lower(), 0.0)
@@ -282,13 +284,20 @@ def preference_score(profile: UserProfile, recipe: Recipe, prefs: UserPreference
             if w > 0:
                 reasons.append("similar to recipes you liked")
 
-    # ingredients (this can be noisy, keep it low weight)
+    #ingredient preference learning from feedback
+    ingredient_matches = 0
+
     for ing in recipe.ingredients[:10]:
         w = prefs.ingredient_weights.get(ing.lower(), 0.0)
-        if w != 0:
-            s += 0.05 * w
 
-    return s, reasons
+        if w != 0:
+            s += 0.1 * w
+            ingredient_matches += 1
+
+    if ingredient_matches >= 2:
+        reasons.append("contains ingredients you liked")
+    elif ingredient_matches == 1:
+        reasons.append("contains an ingredient you liked")
 
 
 def disliked_penalty(profile: UserProfile, recipe: Recipe) -> Tuple[float, List[str]]:
