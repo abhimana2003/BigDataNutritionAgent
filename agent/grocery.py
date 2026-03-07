@@ -101,12 +101,13 @@ BLACKLIST_INGREDIENTS = {
     "cumin", "dill", "cinnamon", "vanilla", "oil", "and", "or", "to",
     "taste", "divided", "halved", "quartered", "sliced", "chopped",
     "peeled", "diced", "minced", "grated", "shredded", "beaten", "fresh",
-    "ground", "dried", "skinless", "boneless", "for garnish", "optional",
+    "dried", "for garnish", "optional",
     # avoid ice-related junk that some recipes list for drinks
     "ice", "cube", "ice cube", "ice cubes", "cubes",
     #avoid directions in ingredients 
     "dusting", "cut", "cooked", "cubed", "cut", "cut into", "inch", "cube", "drained",
     "rinsed", "strip", "more", "patted", "dry", "pitted", "pressed", "through", "a", "press",
+    "finely"
 
 }
 
