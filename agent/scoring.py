@@ -263,8 +263,12 @@ def preference_score(profile: UserProfile, recipe: Recipe, prefs: UserPreference
     """
     Learned preferences from like/dislike history.
     """
+    if prefs is None:
+        return 0, []
     reasons: List[str] = []
     s = 0.0
+
+    
 
     if recipe.recipe_id in prefs.disliked_recipes_ids:
         return -6.0, ["you previously disliked this recipe"]
@@ -302,6 +306,8 @@ def preference_score(profile: UserProfile, recipe: Recipe, prefs: UserPreference
         reasons.append("contains ingredients you liked")
     elif ingredient_matches == 1:
         reasons.append("contains an ingredient you liked")
+
+    return s, reasons
 
 
 def disliked_penalty(profile: UserProfile, recipe: Recipe) -> Tuple[float, List[str]]:

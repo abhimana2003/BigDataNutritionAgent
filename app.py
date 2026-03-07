@@ -741,7 +741,7 @@ def display_mealplan(data: Dict[str, Any]) -> None:
                 "</div>"
             )
 
-        cal_text = f"1 {calories} cal" if calories > 0 else "Meal"
+        cal_text = f"{calories} cal" if calories > 0 else "Meal"
         st.markdown(
             f"""
             <div class="daily-meal-card">

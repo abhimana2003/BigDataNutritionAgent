@@ -45,7 +45,7 @@ def get_user_profiles(db: Session):
 
 
 def get_user_by_username(db: Session, username: str):
-    return db.query(UserProfile).filter(UserProfile.username == username).first()
+    return db.query(UserProfile).filter(UserProfile.username == username.strip()).first()
 
 
 def authenticate_user(db: Session, username: str, password: str):

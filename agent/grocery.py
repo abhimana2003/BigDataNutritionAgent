@@ -104,6 +104,10 @@ BLACKLIST_INGREDIENTS = {
     "ground", "dried", "skinless", "boneless", "for garnish", "optional",
     # avoid ice-related junk that some recipes list for drinks
     "ice", "cube", "ice cube", "ice cubes", "cubes",
+    #avoid directions in ingredients 
+    "dusting", "cut", "cooked", "cubed", "cut", "cut into", "inch", "cube", "drained",
+    "rinsed", "strip", "more", "patted", "dry", "pitted", "pressed", "through", "a", "press",
+
 }
 
 
@@ -161,7 +165,7 @@ def aggregate_ingredients(meal_plan: MealPlan, recipes_by_id: Dict[int, Recipe])
                 # Skip empty strings, blacklisted items, or invalid names
                 if (
                     name
-                    and name not in BLACKLIST_INGREDIENTS
+                    and not any (bad in name for bad in BLACKLIST_INGREDIENTS)
                     and _is_valid_ingredient(name)
                     and name not in seen_in_recipe
                 ):
