@@ -33,7 +33,7 @@ def recommend_for_profile(
     if effective_username is None and user_id is not None:
         effective_username = str(user_id)
 
-    recipes_orm: List[RecipeORM] = db.query(RecipeORM).all()
+    recipes_orm = db.query(RecipeORM).all()
 
     retrieved = _embedding_index.search(recipes_orm, profile, slot=slot, top_n=top_n)  # (orm_recipe, sim)
 
@@ -49,7 +49,7 @@ def recommend_for_profile(
     prefs_user_id = user_id if user_id is not None else effective_username
     prefs = get_user_preferences(prefs_user_id)
 
-    candidates: List[RecipeCandidate] = []
+    candidates = []
     for r, sim in filtered_pairs:
         s, reasons = score_recipe(profile_to_agent_profile(profile, effective_username or "user"), r, prefs=prefs, slot=slot)
 

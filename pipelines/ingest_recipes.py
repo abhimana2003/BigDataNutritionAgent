@@ -511,7 +511,7 @@ def ingest(csv_path: str = "data/raw/recipes.csv", force: bool = False):
             csv_path = str(fallback)
 
     df = pd.read_csv(csv_path)
-    db: Session = SessionLocal()
+    db = SessionLocal()
 
     force = force or os.getenv("FORCE_REINGEST", "").strip().lower() in {"1", "true", "yes"}
     if force:

@@ -184,14 +184,9 @@ EXCLUDE: "drained rinsed", "at room temperature", "chopped", "patted dry", "ice 
 Respond ONLY with the JSON object.
 """
 
-
+# categorizes recipes in general meal families
 def meal_family(recipe: Recipe) -> str:
-    text = " ".join([
-        recipe.title or "",
-        recipe.cuisine or "",
-        " ".join(recipe.ingredients or []),
-    ]).lower()
-
+    text = " ".join([recipe.title or "",recipe.cuisine or "", " ".join(recipe.ingredients or []),]).lower()
     if "salad" in text:
         return "salad"
 
@@ -221,11 +216,10 @@ def meal_family(recipe: Recipe) -> str:
 
 # converts recipe candidates into text rows to include in the prompt
 def build_recipe_table(candidates: List[RecipeCandidate]) -> str:
-    """Return two sections:
+    """
+    Builds a text block for the recipe candidates to include in the prompt, consisting of:  
     1. a summary table (id, title, macros, cost, minutes)
-    2. a simple ingredient list section that the LLM can use to build the
-       grocery list.  Ingredients are separated by commas and prefixed with the
-       recipe id.
+    2. a ingredients list for each recipe
     """
     summary_rows = []
     ingredient_rows = []
@@ -267,9 +261,9 @@ def fill_in_prompt(profile: UserProfile, candidates: List[RecipeCandidate],nutri
         dinner_ids=dinner_ids,
     )
 
-
+# Converts the inputted meal plan object intoa text block
 def build_meal_plan_lines(plan: MealPlan) -> str:
-    lines: List[str] = []
+    lines = []
     for day in plan.days:
         for meal in day.meals:
             lines.append(
@@ -278,12 +272,9 @@ def build_meal_plan_lines(plan: MealPlan) -> str:
             )
     return "\n".join(lines) if lines else "none"
 
-
-def build_recipe_ingredient_lines(
-    plan: MealPlan,
-    recipes_by_id: Dict[int, Recipe],
-) -> str:
-    recipe_ids: List[int] = []
+# Converts the inputted meal plan object into a text block listing the unique recipes and their ingredients
+def build_recipe_ingredient_lines(plan: MealPlan,recipes_by_id: Dict[int, Recipe],) -> str:
+    recipe_ids = []
     seen = set()
     for day in plan.days:
         for meal in day.meals:
@@ -291,7 +282,7 @@ def build_recipe_ingredient_lines(
                 seen.add(meal.recipe_id)
                 recipe_ids.append(meal.recipe_id)
 
-    lines: List[str] = []
+    lines = []
     for rid in recipe_ids:
         recipe = recipes_by_id.get(rid)
         if recipe is None:
@@ -305,14 +296,12 @@ def build_recipe_ingredient_lines(
 
 
 # JSON parsing helpers
-
 def extract_json(text: str) -> Dict[str, Any]:
     text = text.strip()
     # strip markdown code fences if present
     fence = re.search(r"```(?:json)?\s*([\s\S]*?)```", text)
     if fence:
         text = fence.group(1).strip()
-    
     # try direct parse first
     try:
         return json.loads(text)
@@ -320,7 +309,6 @@ def extract_json(text: str) -> Dict[str, Any]:
         pass
     
     # try to find and parse first complete { ... } block
-    # start from first { and build up, counting braces
     start = text.find('{')
     if start != -1:
         # find the matching closing brace
@@ -360,9 +348,7 @@ def _format_decimal(value: float) -> str:
 
 # Convert mixed fractions after ":" (e.g. 1 1/2) to decimals.
 def _normalize_fraction_literals_in_json_like_text(text: str) -> str:
-    mixed_pattern = re.compile(
-        r'(?P<prefix>:\s*)(?P<whole>\d+)\s+(?P<num>\d+)\s*/\s*(?P<den>\d+)(?=\s*[,}\]])'
-    )
+    mixed_pattern = re.compile(r'(?P<prefix>:\s*)(?P<whole>\d+)\s+(?P<num>\d+)\s*/\s*(?P<den>\d+)(?=\s*[,}\]])' )
 
     def _mixed_repl(match: re.Match[str]) -> str:
         whole = float(match.group("whole"))
@@ -400,7 +386,7 @@ def _extract_failed_generation_text(error_text: str) -> Optional[str]:
     start += 1
 
     escaped = False
-    out: List[str] = []
+    out = []
     for idx in range(start, len(error_text)):
         ch = error_text[idx]
         if escaped:
@@ -435,10 +421,10 @@ def _recover_json_from_failed_generation_error(err: Exception) -> Optional[str]:
 
 def parse_meal_plan(raw: Dict[str, Any], recipes_by_id: Dict[int, Recipe]) -> MealPlan:
     days_raw = raw.get("days", [])
-    days: List[DayPlan] = []
+    days = []
     for d in days_raw:
         day_num = int(d.get("day", len(days) + 1))
-        meals: List[PlannedMeal] = []
+        meals = []
         for m in d.get("meals", []):
             mt = str(m.get("meal_type", "")).lower()
             if mt not in VALID_MEAL_TYPES:
@@ -532,11 +518,7 @@ def _clean_grocery_name(name: str) -> str:
     return s
 
 
-def _extract_quantity_unit_and_name(
-    name: str,
-    quantity: Optional[float],
-    unit: Optional[str],
-) -> tuple[str, Optional[float], Optional[str]]:
+def _extract_quantity_unit_and_name(name: str,quantity: Optional[float],unit: Optional[str]) -> tuple[str, Optional[float], Optional[str]]:
     s = name.strip()
     if not s:
         return "", quantity, unit
@@ -585,11 +567,11 @@ def _convert_quantity(quantity: float, unit: str) -> tuple[float, str, str]:
 
 
 def _merge_grocery_items(items: List[GroceryItem]) -> List[GroceryItem]:
-    merged: Dict[tuple[str, str], GroceryItem] = {}
-    merged_order: List[tuple[str, str]] = []
-    unknown: Dict[str, GroceryItem] = {}
-    unknown_order: List[str] = []
-    counts_by_key: Dict[str, int] = {}
+    merged = {}
+    merged_order = []
+    unknown = {}
+    unknown_order = []
+    counts_by_key = {}
 
     for item in items:
         key = _normalize_grocery_name(item.name)
@@ -649,7 +631,7 @@ def _merge_grocery_items(items: List[GroceryItem]) -> List[GroceryItem]:
         if key in unknown:
             unknown.pop(key, None)
 
-    out: List[GroceryItem] = []
+    out = []
     for merged_key in merged_order:
         out.append(merged[merged_key])
     for key in unknown_order:
@@ -661,7 +643,7 @@ def _merge_grocery_items(items: List[GroceryItem]) -> List[GroceryItem]:
 
 def _legacy_parse_grocery_list_unused(raw: Dict[str, Any]) -> GroceryList:
     items_raw = raw.get("grocery_list", [])
-    items: List[GroceryItem] = []
+    items = []
     if not isinstance(items_raw, list):
         return GroceryList(items=items)
 
@@ -695,7 +677,7 @@ def _legacy_parse_grocery_list_unused(raw: Dict[str, Any]) -> GroceryList:
 
 def build_allowed_ids_by_meal_type(candidates: List[RecipeCandidate]) -> Dict[str, List[int]]:
     max_ids_per_type = int(os.environ.get("MEALTYPE_ALLOWED_IDS_MAX", "60"))
-    out: Dict[str, List[int]] = {"breakfast": [], "lunch": [], "dinner": []}
+    out = {"breakfast": [], "lunch": [], "dinner": []}
     for c in candidates:
         r = c.recipe
         if r is None:
@@ -705,7 +687,7 @@ def build_allowed_ids_by_meal_type(candidates: List[RecipeCandidate]) -> Dict[st
                 out[mt].append(r.recipe_id)
     for mt in out:
         seen = set()
-        deduped: List[int] = []
+        deduped = []
         for rid in out[mt]:
             if rid not in seen:
                 deduped.append(rid)
@@ -714,14 +696,11 @@ def build_allowed_ids_by_meal_type(candidates: List[RecipeCandidate]) -> Dict[st
     return out
 
 
-def enforce_meal_slot_compatibility(
-    plan: MealPlan,
-    candidates: List[RecipeCandidate],
-) -> MealPlan:
+def enforce_meal_slot_compatibility(plan: MealPlan,candidates: List[RecipeCandidate]) -> MealPlan:
     RECIPE_COOLDOWN_DAYS = 2
     FAMILY_COOLDOWN_DAYS = 1
     allowed_ids = build_allowed_ids_by_meal_type(candidates)
-    ranked_by_type: Dict[str, List[Recipe]] = {"breakfast": [], "lunch": [], "dinner": []}
+    ranked_by_type = {"breakfast": [], "lunch": [], "dinner": []}
 
     for c in candidates:
         r = c.recipe
@@ -731,23 +710,23 @@ def enforce_meal_slot_compatibility(
             if r.recipe_id in allowed_ids[mt]:
                 ranked_by_type[mt].append(r)
 
-    usage_by_type: Dict[str, Dict[int, int]] = {"breakfast": {}, "lunch": {}, "dinner": {}}
-    prev_day_recipe_by_type: Dict[str, Optional[int]] = {"breakfast": None, "lunch": None, "dinner": None}
-    family_usage_by_type: Dict[str, Dict[str, int]] = {"breakfast": {}, "lunch": {}, "dinner": {}}
-    prev_day_family_by_type: Dict[str, Optional[str]] = {"breakfast": None, "lunch": None, "dinner": None}
-    last_used_day_by_recipe: Dict[int, int] = {}
-    last_used_day_by_family: Dict[str, Dict[str, int]] = {"breakfast": {}, "lunch": {}, "dinner": {}}
+    usage_by_type = {"breakfast": {}, "lunch": {}, "dinner": {}}
+    prev_day_recipe_by_type = {"breakfast": None, "lunch": None, "dinner": None}
+    family_usage_by_type = {"breakfast": {}, "lunch": {}, "dinner": {}}
+    prev_day_family_by_type = {"breakfast": None, "lunch": None, "dinner": None}
+    last_used_day_by_recipe = {}
+    last_used_day_by_family = {"breakfast": {}, "lunch": {}, "dinner": {}}
 
     for dp in plan.days:
         current_day = int(dp.day)
-        used_today: set[int] = set()
-        used_families_today: set[str] = set()
+        used_today = set()
+        used_families_today = set()
         for meal in dp.meals:
             mt = meal.meal_type.lower()
             if mt not in ("breakfast", "lunch", "dinner"):
                 continue
             current_ok = meal.recipe_id in allowed_ids[mt]
-            chosen: Optional[Recipe] = None
+            chosen = None
 
             # keep valid meal if it doesn't duplicate in the same day
             if current_ok and meal.recipe_id not in used_today:
@@ -782,9 +761,9 @@ def enforce_meal_slot_compatibility(
                 usage = usage_by_type[mt]
                 family_usage = family_usage_by_type[mt]
 
-                tier1: List[Recipe] = []
-                tier2: List[Recipe] = []
-                tier3: List[Recipe] = []
+                tier1 = []
+                tier2 = []
+                tier3 = []
 
                 for r in pool:
                     rid = r.recipe_id
@@ -883,7 +862,7 @@ def _default_openai_client() -> Callable[[str, str], str]:
     client = OpenAI(api_key=api_key, base_url=base_url, timeout=timeout_s)
 
     def call(system_prompt: str, user_prompt: str) -> str:
-        last_err: Optional[Exception] = None
+        last_err = None
         for _ in range(2):
             try:
                 resp = client.chat.completions.create(
@@ -925,19 +904,14 @@ class MealPlanner(Planner):
         else:
             self._llm = _default_openai_client()
 
-    def _generate_raw(
-        self,
-        profile: UserProfile,
-        candidates: List[RecipeCandidate],
-        nutrition_targets: Dict[str, float],
-    ) -> tuple[Dict[str, Any], Dict[int, Recipe]]:
+    def _generate_raw(self,profile: UserProfile,candidates: List[RecipeCandidate],nutrition_targets: Dict[str, float]) -> tuple[Dict[str, Any], Dict[int, Recipe]]:
         recipes_by_id = {
             c.recipe.recipe_id: c.recipe
             for c in candidates
             if c.recipe is not None
         }
         base_prompt = fill_in_prompt(profile, candidates, nutrition_targets)
-        parse_error: Optional[Exception] = None
+        parse_error = None
         response_text = ""
 
         for attempt in range(2):
@@ -971,23 +945,13 @@ class MealPlanner(Planner):
             f"Failed to parse LLM response as JSON after retries. Response preview:\n{response_text[:1000]}"
         ) from parse_error
 
-    def generate_plan(
-        self,
-        profile: UserProfile,
-        candidates: List[RecipeCandidate],
-        nutrition_targets: Dict[str, float],
-    ) -> MealPlan:
+    def generate_plan(self,profile: UserProfile,candidates: List[RecipeCandidate],nutrition_targets: Dict[str, float]) -> MealPlan:
         raw, recipes_by_id = self._generate_raw(profile, candidates, nutrition_targets)
         plan = parse_meal_plan(raw, recipes_by_id)
         plan = enforce_meal_slot_compatibility(plan, candidates)
         return plan
 
-    def generate_plan_with_grocery(
-        self,
-        profile: UserProfile,
-        candidates: List[RecipeCandidate],
-        nutrition_targets: Dict[str, float],
-    ) -> tuple[MealPlan, GroceryList]:
+    def generate_plan_with_grocery(self,profile: UserProfile,candidates: List[RecipeCandidate],nutrition_targets: Dict[str, float]) -> tuple[MealPlan, GroceryList]:
         raw, recipes_by_id = self._generate_raw(profile, candidates, nutrition_targets)
         plan = parse_meal_plan(raw, recipes_by_id)
         plan = enforce_meal_slot_compatibility(plan, candidates)
@@ -1000,11 +964,6 @@ class MealPlanner(Planner):
 
 # Mock planner for testing
 class MockMealPlanner(Planner):
-    """
-    Deterministic planner for tests and offline dev.
-    Round-robins through candidates to fill a 7-day plan.
-    """
-
     def generate_plan(
         self,
         profile: UserProfile,
@@ -1016,7 +975,7 @@ class MockMealPlanner(Planner):
         if not pool:
             return MealPlan(days=[], notes="No candidates available")
 
-        pool_by_type: Dict[str, List[RecipeCandidate]] = {}
+        pool_by_type = {}
         for mt in meal_types:
             typed = [
                 c for c in pool
@@ -1028,11 +987,11 @@ class MockMealPlanner(Planner):
         idx_by_type = {mt: 0 for mt in meal_types}
         family_usage_by_type = {mt: {} for mt in meal_types}
         prev_family_by_type = {mt: None for mt in meal_types}
-        days: List[DayPlan] = []
+        days = []
         for d in range(1, 8):
-            meals: List[PlannedMeal] = []
-            used_today: set[int] = set()
-            used_families_today: set[str] = set()
+            meals = []
+            used_today = set()
+            used_families_today = set()
             for mt in meal_types:
                 typed_pool = pool_by_type[mt]
                 if not typed_pool:
@@ -1090,12 +1049,7 @@ class MockMealPlanner(Planner):
         plan = MealPlan(days=days, notes="Generated by MockMealPlanner")
         return enforce_meal_slot_compatibility(plan, candidates)
 
-    def generate_plan_with_grocery(
-        self,
-        profile: UserProfile,
-        candidates: List[RecipeCandidate],
-        nutrition_targets: Dict[str, float],
-    ) -> tuple[MealPlan, GroceryList]:
+    def generate_plan_with_grocery(self,profile: UserProfile,candidates: List[RecipeCandidate],nutrition_targets: Dict[str, float]) -> tuple[MealPlan, GroceryList]:
         plan = self.generate_plan(profile, candidates, nutrition_targets)
         recipes_by_id = {
             c.recipe.recipe_id: c.recipe

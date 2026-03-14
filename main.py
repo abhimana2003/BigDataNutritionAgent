@@ -310,10 +310,10 @@ def regenerate_grocery_list(
     from models import Recipe as RecipeORM
 
     days_in = req.days or []
-    plan_days: list[DayPlan] = []
-    recipe_ids: set[int] = set()
+    plan_days = []
+    recipe_ids = set()
     for day in days_in:
-        meals_out: list[PlannedMeal] = []
+        meals_out = []
         for meal in day.meals:
             rid = int(meal.recipe_id)
             recipe_ids.add(rid)
@@ -391,9 +391,9 @@ def save_mealplan(
         from agent.grocery import SimpleGroceryGenerator
         from models import Recipe as RecipeORM
 
-        plan_days: list[DayPlan] = []
+        plan_days = []
         for day in days:
-            meals_out: list[PlannedMeal] = []
+            meals_out = []
             for meal in day.get("meals", []):
                 meals_out.append(
                     PlannedMeal(
@@ -566,7 +566,7 @@ def generate_mealplan(
         if isinstance(cached_plan, dict) and _targets_match(cached_plan, nutrition_targets):
             return _normalize_cached_plan(cached_plan, target_week_start)
 
-    exclude_recipe_ids: set[int] = set()
+    exclude_recipe_ids = set()
     if next_week:
         prev_week_start = target_week_start - timedelta(days=7)
         prev_plan = crud.get_mealplan_history_for_week(db, username, prev_week_start)

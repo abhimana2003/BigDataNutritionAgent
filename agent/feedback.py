@@ -9,11 +9,11 @@ from agent.interfaces import FeedbackEvent, Recipe, UserPreferences
 
 # valid feedback actions that can be recorded and processed
 VALID_ACTIONS = {"like", "dislike", "doesnt_fit"}
-_MEMORY_FEEDBACK_RECIPES: Dict[int, List[Tuple[Recipe, str]]] = defaultdict(list)
+_MEMORY_FEEDBACK_RECIPES = defaultdict(list)
 
 # normalizes lists of text
 def _norm_text_list(values: Optional[Iterable[str]]) -> List[str]:
-    out: List[str] = []
+    out = []
     if not values:
         return out
     for value in values:

@@ -45,7 +45,7 @@ def recommend(user_id: int, profile: UserProfile, slot: MealSlot, k: int = 10) -
 
     prefs = get_user_preferences(user_id)  # can return empty prefs if new user
 
-    candidates: List[RecipeCandidate] = []
+    candidates = []
     for r in allowed:
         violations = recipe_violations(profile, r)
         if violations:

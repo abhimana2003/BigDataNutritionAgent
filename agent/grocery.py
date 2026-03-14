@@ -653,7 +653,7 @@ def parse_ingredient_line(raw: str) -> Optional[ParsedIngredient]:
 
     parts = remainder.split()
     unit = None
-    name_tokens: List[str] = []
+    name_tokens = []
 
     if parts:
         unit_candidate = UNIT_ALIASES.get(parts[0])
@@ -906,7 +906,7 @@ def _get_meal_attr(meal, attr_name: str, default=None):
 
 # aggregates ingrediants from the meal plan
 def aggregate_ingredients(meal_plan: MealPlan, recipes_by_id: Dict[int, Recipe]) -> List[GroceryItem]:
-    grouped: Dict[Tuple[str, str], Dict[str, object]] = defaultdict(
+    grouped = defaultdict(
         lambda: {
             "name": "",
             "quantity": 0.0,
@@ -916,8 +916,8 @@ def aggregate_ingredients(meal_plan: MealPlan, recipes_by_id: Dict[int, Recipe])
     )
 
     meals = _extract_plan_meals(meal_plan)
-    quantified_names: set[str] = set()
-    unquantified_counts: Dict[str, float] = defaultdict(float)
+    quantified_names = set()
+    unquantified_counts = defaultdict(float)
 
     for meal in meals:
         recipe_id = _get_meal_attr(meal, "recipe_id")
@@ -966,7 +966,7 @@ def aggregate_ingredients(meal_plan: MealPlan, recipes_by_id: Dict[int, Recipe])
         grouped[key]["unit"] = "count"
         grouped[key]["category"] = _categorize(name)
 
-    items: List[GroceryItem] = []
+    items = []
     for (_, _family), data in grouped.items():
         qty = float(data["quantity"])
         unit = data["unit"]
@@ -993,7 +993,7 @@ def aggregate_ingredients(meal_plan: MealPlan, recipes_by_id: Dict[int, Recipe])
 
 # formats the grocery list into a human readable format
 def format_grocery_items(items: List[GroceryItem]) -> str:
-    lines: List[str] = []
+    lines = []
 
     for item in items:
         name = item.name.strip()
@@ -1046,7 +1046,7 @@ class SimpleGroceryGenerator(GroceryGenerator):
     def generate(self, meal_plan: MealPlan, recipes_by_id: Dict[int, Recipe]) -> GroceryList:
         items = aggregate_ingredients(meal_plan, recipes_by_id)
         if not items:
-            counts: Dict[str, float] = defaultdict(float)
+            counts = defaultdict(float)
             for meal in _extract_plan_meals(meal_plan):
                 recipe_id = _get_meal_attr(meal, "recipe_id")
                 if recipe_id is None:
@@ -1152,10 +1152,10 @@ def _planner_convert_quantity(quantity: float, unit: str, name: str):
 
 
 def _planner_merge_grocery_items(items: List[GroceryItem]) -> List[GroceryItem]:
-    merged: Dict[Tuple[str, str], GroceryItem] = {}
-    merged_order: List[Tuple[str, str]] = []
-    singles: List[GroceryItem] = []
-    counts_by_key: Dict[str, int] = {}
+    merged = {}
+    merged_order = []
+    singles = []
+    counts_by_key = {}
 
     for item in items:
         key = _planner_normalize_grocery_name(item.name)
@@ -1205,7 +1205,7 @@ def _planner_merge_grocery_items(items: List[GroceryItem]) -> List[GroceryItem]:
         if current.category is None and item.category is not None:
             current.category = item.category
 
-    out: List[GroceryItem] = []
+    out = []
     out.extend(singles)
     for merged_key in merged_order:
         gi = merged[merged_key]
@@ -1227,7 +1227,7 @@ def _planner_merge_grocery_items(items: List[GroceryItem]) -> List[GroceryItem]:
 
 def parse_grocery_list(raw: Dict[str, object]) -> GroceryList:
     items_raw = raw.get("grocery_list", []) if isinstance(raw, dict) else []
-    items: List[GroceryItem] = []
+    items = []
 
     if not isinstance(items_raw, list):
         return GroceryList(items=items)

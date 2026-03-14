@@ -17,7 +17,7 @@ def profile_form(prefilled_username: str = None) -> None:
         st.info("Please enter a username")
         return
 
-    existing: Dict[str, Any] = {}
+    existing = {}
     if prefilled_username:
         try:
             resp = requests.get(f"{API_URL}/{username}")
@@ -87,7 +87,7 @@ def profile_form(prefilled_username: str = None) -> None:
         submitted = st.form_submit_button("Update Profile")
 
     if submitted:
-        errors: List[str] = []
+        errors = []
 
         def parse_int(name: str, raw: str, min_val: int, max_val: int):
             value = (raw or "").strip()

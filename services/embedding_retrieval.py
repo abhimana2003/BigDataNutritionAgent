@@ -14,7 +14,7 @@ class EmbeddingIndex:
         return {t for t in tokens if len(t) > 1}
 
     def _recipe_text(self, recipe) -> str:
-        parts: List[str] = []
+        parts = []
         name = getattr(recipe, "recipe_name", None) or getattr(recipe, "title", None)
         if name:
             parts.append(str(name))
@@ -35,7 +35,7 @@ class EmbeddingIndex:
         return " ".join(parts)
 
     def _profile_text(self, profile, slot=None) -> str:
-        parts: List[str] = []
+        parts = []
         goal = getattr(profile, "goal", None)
         if goal:
             parts.append(str(goal))
@@ -57,7 +57,7 @@ class EmbeddingIndex:
         top_n: int = 50,
     ) -> List[Tuple[object, float]]:
         profile_tokens = self._tokenize(self._profile_text(profile, slot=slot))
-        results: List[Tuple[object, float]] = []
+        results = []
         for recipe in recipes:
             recipe_tokens = self._tokenize(self._recipe_text(recipe))
             if not profile_tokens:

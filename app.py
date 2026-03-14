@@ -530,7 +530,7 @@ _grocery_lock = threading.Lock()
 
 def enqueue_grocery_refresh(username: str, days: List[Dict[str, Any]]) -> None:
     with _grocery_lock:
-        existing: Future | None = st.session_state.get("grocery_refresh_future")
+        existing = st.session_state.get("grocery_refresh_future")
         if existing and not existing.done():
             st.session_state["pending_grocery_refresh"] = {"username": username, "days": days}
             return
@@ -542,7 +542,7 @@ def enqueue_grocery_refresh(username: str, days: List[Dict[str, Any]]) -> None:
 
 
 def poll_grocery_refresh() -> None:
-    future: Future | None = st.session_state.get("grocery_refresh_future")
+    future = st.session_state.get("grocery_refresh_future")
     if not future or not future.done():
         return
     try:
@@ -588,7 +588,7 @@ def refresh_grocery_now(username: str, days: List[Dict[str, Any]]) -> bool:
 
 
 def _build_local_grocery_fallback(days: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    merged: Dict[str, Dict[str, Any]] = {}
+    merged = {}
     for day in days or []:
         for meal in day.get("meals", []) or []:
             rid = meal.get("recipe_id")
@@ -758,7 +758,7 @@ def show_profile_form(prefilled_username=None) -> None:
         submitted = st.form_submit_button("Submit Profile")
 
     if submitted:
-        errors: List[str] = []
+        errors = []
 
         def parse_int(name: str, raw: str, min_val: int, max_val: int):
             value = (raw or "").strip()

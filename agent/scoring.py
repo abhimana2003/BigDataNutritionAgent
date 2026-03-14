@@ -99,7 +99,7 @@ def estimate_calories(recipe: Recipe) -> Optional[float]:
 
 def score_recipe(profile: UserProfile, recipe: Recipe, prefs: Optional[UserPreferences] = None, slot: Optional[MealSlot] = None) -> Tuple[float, List[str]]:
     score = 0.0
-    reasons: List[str] = []
+    reasons = []
 
     # 1) goal-aware scoring
     g_score, g_reasons = goal_score(profile, recipe)
@@ -138,7 +138,7 @@ def score_recipe(profile: UserProfile, recipe: Recipe, prefs: Optional[UserPrefe
 
 
 def goal_score(profile: UserProfile, recipe: Recipe) -> Tuple[float, List[str]]:
-    reasons: List[str] = []
+    reasons = []
     s = 0.0
 
     goal = (profile.goal or "").lower()
@@ -203,7 +203,7 @@ def goal_score(profile: UserProfile, recipe: Recipe) -> Tuple[float, List[str]]:
 
 
 def time_score(profile: UserProfile, recipe: Recipe) -> Tuple[float, List[str]]:
-    reasons: List[str] = []
+    reasons = []
     s = 0.0
 
     pref = (profile.cooking_time or "").lower()
@@ -234,7 +234,7 @@ def time_score(profile: UserProfile, recipe: Recipe) -> Tuple[float, List[str]]:
 
 
 def diet_tag_score(profile: UserProfile, recipe: Recipe) -> Tuple[float, List[str]]:
-    reasons: List[str] = []
+    reasons = []
     s = 0.0
 
     prefs = [p.lower() for p in profile.dietary_preferences]
@@ -251,7 +251,7 @@ def diet_tag_score(profile: UserProfile, recipe: Recipe) -> Tuple[float, List[st
 def preference_score(profile: UserProfile, recipe: Recipe, prefs: UserPreferences) -> Tuple[float, List[str]]:
     if prefs is None:
         return 0, []
-    reasons: List[str] = []
+    reasons = []
     s = 0.0
 
     
@@ -297,7 +297,7 @@ def preference_score(profile: UserProfile, recipe: Recipe, prefs: UserPreference
 
 
 def disliked_penalty(profile: UserProfile, recipe: Recipe) -> Tuple[float, List[str]]:
-    reasons: List[str] = []
+    reasons = []
     s = 0.0
 
     dislikes = [d.lower() for d in profile.disliked_ingredients]
