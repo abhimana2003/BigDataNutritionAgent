@@ -52,6 +52,7 @@ def run_migrations() -> None:
                 )
             )
             conn.execute(text("ALTER TABLE recipes ADD COLUMN IF NOT EXISTS username VARCHAR"))
+            conn.execute(text("ALTER TABLE meal_plan_history ADD COLUMN IF NOT EXISTS meal_plan JSON"))
     except ProgrammingError:
         # Some environments connect with a non-owner DB user; run_project.sh applies the same SQL via psql owner context.
         pass

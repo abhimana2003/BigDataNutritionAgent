@@ -4,17 +4,14 @@ from schemas import UserProfileCreate, NutritionTargets
 
 
 def calculate_targets(profile: UserProfileCreate) -> NutritionTargets:
-    """Return daily calorie and macro targets based on ``profile``.
-    uses a simplified Mifflin-St Jeor equation to
-    estimate basal metabolic rate (BMR) and applies an activity
-    multiplier (moderate activity level).  The targets are then adjusted
-    based on the user's goal 
+    """
+    Return daily calorie and macro targets based on user profile.
+    Uses a simplified Mifflin-St Jeor equation to estimate basal metabolic rate and applies an activity
+    multiplier (assumes moderate activity level). Then adjusts everything based on user's goals
 
-    Macros are set as follows:
-    * high_protein: 2.2 g protein per kg body weight, 25%% of calories
-      from fat, remainder from carbs
-    * other goals: 1.6 g protein per kg body weight, 30%% of calories
-      from fat, remainder from carbs
+    Macros are set based on the goals:
+    If they want high_protein -> 2.2 g protein per kg body weight, 25%% of caloriesfrom fat, remainder from carbs
+    For other goals -> 1.6 g protein per kg body weight, 30%% of calories from fat, remainder from carbs
     """
 
     # convert units

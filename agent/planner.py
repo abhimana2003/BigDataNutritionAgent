@@ -1,5 +1,6 @@
 # meal plan generator module
 from __future__ import annotations
+import ast
 import json
 import logging
 import os
@@ -7,7 +8,7 @@ import re
 import time
 from typing import Any, Callable, Dict, List, Optional
 from agent.interfaces import DayPlan, GroceryItem, GroceryList, MealPlan, MealSlot, Planner, PlannedMeal,Recipe, RecipeCandidate,UserProfile
-from agent.grocery import SimpleGroceryGenerator
+from agent.grocery import SimpleGroceryGenerator, parse_grocery_list
 from agent.scoring import is_slot_compatible
 
 logger = logging.getLogger(__name__)
@@ -55,6 +56,33 @@ UNIT_ALIASES = {
     "count": "count",
 }
 
+UNIT_FAMILIES = {
+    "tsp": "volume_us",
+    "tbsp": "volume_us",
+    "cup": "volume_us",
+    "oz": "weight_us",
+    "lb": "weight_us",
+    "g": "weight_metric",
+    "kg": "weight_metric",
+    "ml": "volume_metric",
+    "l": "volume_metric",
+    "count": "count",
+}
+
+UNIT_TO_BASE = {
+    "tsp": ("tbsp", 1.0 / 3.0),
+    "tbsp": ("tbsp", 1.0),
+    "cup": ("tbsp", 16.0),
+    "oz": ("oz", 1.0),
+    "lb": ("oz", 16.0),
+    "g": ("g", 1.0),
+    "kg": ("g", 1000.0),
+    "ml": ("ml", 1.0),
+    "l": ("ml", 1000.0),
+    "count": ("count", 1.0),
+    "dozen": ("count", 12.0),
+}
+
 DROP_GROCERY_NAMES = {"base_servings", "base servings", "ingredients", "ingredient", "none", "null", "n/a"}
 DROP_GROCERY_WORDS = {
     "fresh", "frozen", "dried", "ground", "seasoned", "blend", "pitted", "canned", "low", "fat", "lowfat",
@@ -70,10 +98,6 @@ You are a professional nutritionist AI. You create personalized 7-day meal plans
 You MUST reply with valid JSON only — no markdown fences, no commentary outside the JSON.
 """
 
-GROCERY_SYSTEM_PROMPT = """\
-You are a grocery planning assistant.
-You MUST reply with valid JSON only — no markdown fences, no commentary outside the JSON.
-"""
 # sets instructions for each request from user
 USER_PROMPT_TEMPLATE = """\
 Create a 7-day meal plan using ONLY the recipes listed below.
@@ -160,40 +184,39 @@ EXCLUDE: "drained rinsed", "at room temperature", "chopped", "patted dry", "ice 
 Respond ONLY with the JSON object.
 """
 
-GROCERY_USER_PROMPT_TEMPLATE = """\
-Create one consolidated grocery list for the weekly meal plan below.
 
-## Weekly Meal Plan
-{meal_plan_lines}
+def meal_family(recipe: Recipe) -> str:
+    text = " ".join([
+        recipe.title or "",
+        recipe.cuisine or "",
+        " ".join(recipe.ingredients or []),
+    ]).lower()
 
-## Recipe Ingredient Details
-{recipe_ingredient_lines}
+    if "salad" in text:
+        return "salad"
 
-## Rules
-1. Return ingredients consolidated across the whole week.
-2. Merge duplicates into one item with summed quantity.
-3. Estimate practical store purchase units when possible:
-   - examples: lb, oz, g, kg, bunch, bag, carton, dozen, can, jar, bottle, loaf, count.
-4. Quantities should represent what the user would buy at the store for the full week.
-5. Use decimal quantities only when needed (e.g., 1.5 lb).
-6. Keep ingredient names generic and normalized (e.g., "onion", not "small onion diced").
-7. If uncertain, set quantity to null and unit to null.
-8. Do not use "meals" as a unit.
+    if any(x in text for x in ["soup", "stew", "chili", "gazpacho", "bisque"]):
+        return "soup_stew"
 
-## Required JSON output format
-{{
-  "grocery_list": [
-    {{
-      "name": "<ingredient name>",
-      "quantity": <number or null>,
-      "unit": "<unit or null>",
-      "category": "<produce|protein|dairy|grains|pantry|spices|other>"
-    }}
-  ]
-}}
+    if any(x in text for x in ["pasta", "spaghetti", "penne", "macaroni", "lasagna", "risotto"]):
+        return "pasta"
 
-Respond ONLY with the JSON object.
-"""
+    if any(x in text for x in ["sandwich", "wrap", "burger", "panini", "melt"]):
+        return "sandwich_wrap"
+
+    if any(x in text for x in ["taco", "quesadilla", "fajita", "burrito", "enchilada"]):
+        return "taco_mexican"
+
+    if any(x in text for x in ["rice bowl", "grain bowl", "quinoa bowl", "bowl", "rice", "quinoa"]):
+        return "bowl_rice_grain"
+
+    if any(x in text for x in ["stir-fry", "stir fry"]):
+        return "stir_fry"
+
+    if any(x in text for x in ["casserole", "bake", "baked ziti", "meatloaf"]):
+        return "casserole_bake"
+
+    return "other"
 
 
 # converts recipe candidates into text rows to include in the prompt
@@ -281,13 +304,6 @@ def build_recipe_ingredient_lines(
     return "\n".join(lines) if lines else "none"
 
 
-def fill_in_grocery_prompt(plan: MealPlan, recipes_by_id: Dict[int, Recipe]) -> str:
-    return GROCERY_USER_PROMPT_TEMPLATE.format(
-        meal_plan_lines=build_meal_plan_lines(plan),
-        recipe_ingredient_lines=build_recipe_ingredient_lines(plan, recipes_by_id),
-    )
-
-
 # JSON parsing helpers
 
 def extract_json(text: str) -> Dict[str, Any]:
@@ -336,6 +352,86 @@ def extract_json(text: str) -> Dict[str, Any]:
                 pass
     
     raise ValueError(f"Could not extract JSON from LLM response:\n{text[:500]}")
+
+
+def _format_decimal(value: float) -> str:
+    text = f"{value:.6f}".rstrip("0").rstrip(".")
+    return text if text else "0"
+
+# Convert mixed fractions after ":" (e.g. 1 1/2) to decimals.
+def _normalize_fraction_literals_in_json_like_text(text: str) -> str:
+    mixed_pattern = re.compile(
+        r'(?P<prefix>:\s*)(?P<whole>\d+)\s+(?P<num>\d+)\s*/\s*(?P<den>\d+)(?=\s*[,}\]])'
+    )
+
+    def _mixed_repl(match: re.Match[str]) -> str:
+        whole = float(match.group("whole"))
+        num = float(match.group("num"))
+        den = float(match.group("den"))
+        if den == 0:
+            return match.group(0)
+        return f'{match.group("prefix")}{_format_decimal(whole + (num / den))}'
+
+    text = mixed_pattern.sub(_mixed_repl, text)
+
+    # Convert simple fractions after ":" (e.g. 1/4) to decimals.
+    frac_pattern = re.compile(
+        r'(?P<prefix>:\s*)(?P<num>\d+)\s*/\s*(?P<den>\d+)(?=\s*[,}\]])'
+    )
+
+    def _frac_repl(match: re.Match[str]) -> str:
+        num = float(match.group("num"))
+        den = float(match.group("den"))
+        if den == 0:
+            return match.group(0)
+        return f'{match.group("prefix")}{_format_decimal(num / den)}'
+
+    return frac_pattern.sub(_frac_repl, text)
+
+
+def _extract_failed_generation_text(error_text: str) -> Optional[str]:
+    marker = "'failed_generation': "
+    start = error_text.find(marker)
+    if start == -1:
+        return None
+    start += len(marker)
+    if start >= len(error_text) or error_text[start] != "'":
+        return None
+    start += 1
+
+    escaped = False
+    out: List[str] = []
+    for idx in range(start, len(error_text)):
+        ch = error_text[idx]
+        if escaped:
+            out.append(ch)
+            escaped = False
+            continue
+        if ch == "\\":
+            out.append(ch)
+            escaped = True
+            continue
+        if ch == "'":
+            raw_literal = "'" + "".join(out) + "'"
+            try:
+                return ast.literal_eval(raw_literal)
+            except Exception:
+                return "".join(out)
+        out.append(ch)
+    return None
+
+
+def _recover_json_from_failed_generation_error(err: Exception) -> Optional[str]:
+    failed_generation = _extract_failed_generation_text(str(err))
+    if not failed_generation:
+        return None
+
+    repaired = _normalize_fraction_literals_in_json_like_text(failed_generation)
+    try:
+        parsed = extract_json(repaired)
+    except Exception:
+        return None
+    return json.dumps(parsed)
 
 def parse_meal_plan(raw: Dict[str, Any], recipes_by_id: Dict[int, Recipe]) -> MealPlan:
     days_raw = raw.get("days", [])
@@ -482,55 +578,88 @@ def _normalize_unit(unit: Optional[str]) -> Optional[str]:
     return UNIT_ALIASES.get(s, s)
 
 
+def _convert_quantity(quantity: float, unit: str) -> tuple[float, str, str]:
+    base_unit, factor = UNIT_TO_BASE.get(unit, (unit, 1.0))
+    family = UNIT_FAMILIES.get(unit, unit)
+    return quantity * factor, base_unit, family
+
+
 def _merge_grocery_items(items: List[GroceryItem]) -> List[GroceryItem]:
-    merged: Dict[str, GroceryItem] = {}
-    order: List[str] = []
+    merged: Dict[tuple[str, str], GroceryItem] = {}
+    merged_order: List[tuple[str, str]] = []
+    unknown: Dict[str, GroceryItem] = {}
+    unknown_order: List[str] = []
+    counts_by_key: Dict[str, int] = {}
 
     for item in items:
         key = _normalize_grocery_name(item.name)
         if not key:
             continue
+        counts_by_key[key] = counts_by_key.get(key, 0) + 1
 
-        if key not in merged:
-            merged[key] = GroceryItem(
-                name=item.name.strip(),
-                quantity=item.quantity,
-                unit=item.unit,
-                category=item.category,
-            )
-            order.append(key)
+    for item in items:
+        key = _normalize_grocery_name(item.name)
+        if not key:
+            continue
+        quantity = item.quantity
+        unit = _normalize_unit(item.unit)
+
+        if quantity is None or unit is None:
+            if key not in unknown:
+                unknown[key] = GroceryItem(
+                    name=item.name.strip(),
+                    quantity=quantity,
+                    unit=unit,
+                    category=item.category,
+                )
+                unknown_order.append(key)
             continue
 
-        current = merged[key]
-        current_unit = _normalize_unit(current.unit)
-        incoming_unit = _normalize_unit(item.unit)
+        if counts_by_key.get(key, 0) <= 1:
+            merged_key = (key, "single")
+            if merged_key not in merged:
+                merged[merged_key] = GroceryItem(
+                    name=item.name.strip(),
+                    quantity=quantity,
+                    unit=unit,
+                    category=item.category,
+                )
+                merged_order.append(merged_key)
+            continue
 
-        # Prefer whichever non-empty unit/category we have.
-        if current.unit is None and item.unit is not None:
-            current.unit = item.unit
+        quantity, base_unit, family = _convert_quantity(quantity, unit)
+        merged_key = (key, family)
+
+        if merged_key not in merged:
+            merged[merged_key] = GroceryItem(
+                name=item.name.strip(),
+                quantity=quantity,
+                unit=base_unit,
+                category=item.category,
+            )
+            merged_order.append(merged_key)
+            continue
+
+        current = merged[merged_key]
+        current.quantity = (current.quantity or 0.0) + quantity
+        current.unit = base_unit
         if current.category is None and item.category is not None:
             current.category = item.category
 
-        # Merge quantities when units are compatible.
-        if current.quantity is not None and item.quantity is not None:
-            if current_unit == incoming_unit or current_unit is None or incoming_unit is None:
-                current.quantity = current.quantity + item.quantity
-                if current.unit is None and item.unit is not None:
-                    current.unit = item.unit
-            else:
-                # Conflicting units for the same ingredient; keep one line item
-                # but mark quantity/unit unknown instead of producing bad math.
-                current.quantity = None
-                current.unit = None
-        elif current.quantity is None and item.quantity is not None:
-            current.quantity = item.quantity
-            if current.unit is None and item.unit is not None:
-                current.unit = item.unit
+        if key in unknown:
+            unknown.pop(key, None)
 
-    return [merged[k] for k in order]
+    out: List[GroceryItem] = []
+    for merged_key in merged_order:
+        out.append(merged[merged_key])
+    for key in unknown_order:
+        if any(mk[0] == key for mk in merged_order):
+            continue
+        out.append(unknown[key])
+    return out
 
 
-def parse_grocery_list(raw: Dict[str, Any]) -> GroceryList:
+def _legacy_parse_grocery_list_unused(raw: Dict[str, Any]) -> GroceryList:
     items_raw = raw.get("grocery_list", [])
     items: List[GroceryItem] = []
     if not isinstance(items_raw, list):
@@ -589,6 +718,8 @@ def enforce_meal_slot_compatibility(
     plan: MealPlan,
     candidates: List[RecipeCandidate],
 ) -> MealPlan:
+    RECIPE_COOLDOWN_DAYS = 2
+    FAMILY_COOLDOWN_DAYS = 1
     allowed_ids = build_allowed_ids_by_meal_type(candidates)
     ranked_by_type: Dict[str, List[Recipe]] = {"breakfast": [], "lunch": [], "dinner": []}
 
@@ -602,9 +733,15 @@ def enforce_meal_slot_compatibility(
 
     usage_by_type: Dict[str, Dict[int, int]] = {"breakfast": {}, "lunch": {}, "dinner": {}}
     prev_day_recipe_by_type: Dict[str, Optional[int]] = {"breakfast": None, "lunch": None, "dinner": None}
+    family_usage_by_type: Dict[str, Dict[str, int]] = {"breakfast": {}, "lunch": {}, "dinner": {}}
+    prev_day_family_by_type: Dict[str, Optional[str]] = {"breakfast": None, "lunch": None, "dinner": None}
+    last_used_day_by_recipe: Dict[int, int] = {}
+    last_used_day_by_family: Dict[str, Dict[str, int]] = {"breakfast": {}, "lunch": {}, "dinner": {}}
 
     for dp in plan.days:
+        current_day = int(dp.day)
         used_today: set[int] = set()
+        used_families_today: set[str] = set()
         for meal in dp.meals:
             mt = meal.meal_type.lower()
             if mt not in ("breakfast", "lunch", "dinner"):
@@ -614,21 +751,94 @@ def enforce_meal_slot_compatibility(
 
             # keep valid meal if it doesn't duplicate in the same day
             if current_ok and meal.recipe_id not in used_today:
-                chosen = next((r for r in ranked_by_type[mt] if r.recipe_id == meal.recipe_id), None)
+                last_day = last_used_day_by_recipe.get(meal.recipe_id)
+                candidate_recipe = next((r for r in ranked_by_type[mt] if r.recipe_id == meal.recipe_id), None)
+                candidate_family = meal_family(candidate_recipe) if candidate_recipe is not None else None
+                last_family_day = (
+                    last_used_day_by_family[mt].get(candidate_family)
+                    if candidate_family is not None else None
+                )
+                if (
+                    (candidate_family is not None and candidate_family in used_families_today)
+                    or
+                    (last_day is not None and (current_day - last_day) <= RECIPE_COOLDOWN_DAYS)
+                    or (last_family_day is not None and (current_day - last_family_day) <= FAMILY_COOLDOWN_DAYS)
+                ):
+                    current_ok = False
+                else:
+                    chosen = candidate_recipe
 
             # otherwise pick a compatible replacement with diversity preference
             if chosen is None:
                 pool = ranked_by_type[mt]
                 if not pool:
                     continue
+                MAX_FAMILY_REPEATS = {
+                    "breakfast": 3,
+                    "lunch": 2,
+                    "dinner": 2,
+                }
                 prev_id = prev_day_recipe_by_type[mt]
                 usage = usage_by_type[mt]
+                family_usage = family_usage_by_type[mt]
 
-                def sort_key(r: Recipe) -> tuple[int, int, int]:
+                tier1: List[Recipe] = []
+                tier2: List[Recipe] = []
+                tier3: List[Recipe] = []
+
+                for r in pool:
+                    rid = r.recipe_id
+                    fam = meal_family(r)
+                    last_day = last_used_day_by_recipe.get(rid)
+                    last_family_day = last_used_day_by_family[mt].get(fam)
+
+                    # Tier 1 (strict): not same exact recipe today, not same family today, not used in last N days, not same family as yesterday, family under weekly cap
+                    if rid in used_today:
+                        pass
+                    elif fam in used_families_today:
+                        pass
+                    elif last_day is not None and (current_day - last_day) <= RECIPE_COOLDOWN_DAYS:
+                        pass
+                    elif last_family_day is not None and (current_day - last_family_day) <= FAMILY_COOLDOWN_DAYS:
+                        pass
+                    elif family_usage.get(fam, 0) >= MAX_FAMILY_REPEATS.get(mt, 2):
+                        pass
+                    else:
+                        tier1.append(r)
+
+                    # Tier 2 (medium): allow same family as yesterday, still block exact recent recipe, still block same-family in the same day, still avoid same-day duplicate recipe, keep weekly family cap
+                    if rid in used_today:
+                        pass
+                    elif fam in used_families_today:
+                        pass
+                    elif last_day is not None and (current_day - last_day) <= RECIPE_COOLDOWN_DAYS:
+                        pass
+                    elif family_usage.get(fam, 0) >= MAX_FAMILY_REPEATS.get(mt, 2):
+                        pass
+                    else:
+                        tier2.append(r)
+
+                    # Tier 3 (basic): any compatible recipe; keep only same-day duplicate block
+                    if rid not in used_today:
+                        tier3.append(r)
+
+                if tier1:
+                    pool = tier1
+                elif tier2:
+                    pool = tier2
+                elif tier3:
+                    pool = tier3
+                else:
+                    continue
+
+                def sort_key(r: Recipe) -> tuple[int, int, int, int, str]:
+                    fam = meal_family(r)
                     return (
-                        1 if r.recipe_id in used_today else 0,                # avoid same-day duplicates first
-                        1 if prev_id is not None and r.recipe_id == prev_id else 0,  # avoid repeating previous day
-                        usage.get(r.recipe_id, 0),                             # prefer less-used recipes
+                        1 if r.recipe_id in used_today else 0,                        
+                        1 if prev_id is not None and r.recipe_id == prev_id else 0,    
+                        family_usage.get(fam, 0),                                      
+                        usage.get(r.recipe_id, 0),                                       
+                        fam,                                                           
                     )
 
                 chosen = min(pool, key=sort_key)
@@ -643,136 +853,72 @@ def enforce_meal_slot_compatibility(
             used_today.add(chosen.recipe_id)
             usage_by_type[mt][chosen.recipe_id] = usage_by_type[mt].get(chosen.recipe_id, 0) + 1
             prev_day_recipe_by_type[mt] = chosen.recipe_id
+            fam = meal_family(chosen)
+            used_families_today.add(fam)
+            family_usage_by_type[mt][fam] = family_usage_by_type[mt].get(fam, 0) + 1
+            prev_day_family_by_type[mt] = fam
+            last_used_day_by_recipe[chosen.recipe_id] = current_day
+            last_used_day_by_family[mt][fam] = current_day
     return plan
 
 
-# LLM client wrapper
 
 def _default_openai_client() -> Callable[[str, str], str]:
-    """Return a callable(system, user) -> response_text using Ollama locally."""
+    """Return a callable(system, user) -> response_text using Groq."""
     try:
-        import requests
+        from openai import OpenAI
     except ImportError:
-        raise ImportError("Install requests: pip install requests")
-    # allow configuration via env vars for flexibility
-    ollama_url = os.environ.get("OLLAMA_URL", "http://localhost:11434/api/generate")
-    model = os.environ.get("OLLAMA_MODEL", "neural-chat")
-    timeout_s = int(os.environ.get("OLLAMA_TIMEOUT_SECONDS", "300"))
-    num_predict = int(os.environ.get("OLLAMA_NUM_PREDICT", "2200"))
-    temperature = float(os.environ.get("OLLAMA_TEMPERATURE", "0.2"))
+        raise ImportError("Install openai: pip install openai")
 
-    def _extract_text(result: Any) -> Optional[str]:
-        if not isinstance(result, dict):
-            return None
+    api_key = os.environ.get("GROQ_API_KEY")
+    if not api_key:
+        raise RuntimeError("GROQ_API_KEY is not set")
 
-        # Explicit API-side error from Ollama
-        if isinstance(result.get("error"), str) and result["error"].strip():
-            raise RuntimeError(f"Ollama error: {result['error']}")
+    base_url = os.environ.get("GROQ_BASE_URL", "https://api.groq.com/openai/v1")
+    model = os.environ.get("GROQ_MODEL", "llama-3.1-8b-instant")
+    timeout_s = int(os.environ.get("GROQ_TIMEOUT_SECONDS", "120"))
+    temperature = float(os.environ.get("GROQ_TEMPERATURE", "0.2"))
+    max_tokens = int(os.environ.get("GROQ_MAX_TOKENS", "2200"))
 
-        # Common Ollama keys
-        response = result.get("response")
-        if isinstance(response, str) and response.strip():
-            return response
-
-        text = result.get("text")
-        if isinstance(text, str) and text.strip():
-            return text
-
-        message = result.get("message")
-        if isinstance(message, dict):
-            content = message.get("content") or message.get("text")
-            if isinstance(content, str) and content.strip():
-                return content
-
-        choices = result.get("choices") or result.get("generations")
-        if choices and isinstance(choices, list) and len(choices) > 0:
-            first = choices[0]
-            if isinstance(first, dict):
-                choice_text = first.get("text")
-                if isinstance(choice_text, str) and choice_text.strip():
-                    return choice_text
-                choice_msg = first.get("message")
-                if isinstance(choice_msg, dict):
-                    msg = choice_msg.get("content") or choice_msg.get("text")
-                    if isinstance(msg, str) and msg.strip():
-                        return msg
-
-        return None
+    client = OpenAI(api_key=api_key, base_url=base_url, timeout=timeout_s)
 
     def call(system_prompt: str, user_prompt: str) -> str:
-        # prefer the structured messages API, but also send a combined prompt as fallback
-        messages = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
-        ]
-        payloads = [
-            {
-                "model": model,
-                "messages": messages,
-                "stream": False,
-                "format": "json",
-                "options": {"num_predict": num_predict, "temperature": temperature},
-            },
-            {
-                "model": model,
-                "prompt": f"{system_prompt}\n\n{user_prompt}",
-                "stream": False,
-                "format": "json",
-                "options": {"num_predict": num_predict, "temperature": temperature},
-            },
-        ]
-
         last_err: Optional[Exception] = None
-        last_result_preview: Optional[str] = None
-        for payload in payloads:
-            for attempt in range(2):
-                try:
-                    resp = requests.post(ollama_url, json=payload, timeout=timeout_s)
-                    resp.raise_for_status()
-                    result = resp.json()
-                    text = _extract_text(result)
-                    done_reason = result.get("done_reason") if isinstance(result, dict) else None
-                    if text is not None:
-                        return text
-                    # some Ollama versions return an initial "load" result with empty text
-                    if done_reason == "load" and attempt == 0:
-                        time.sleep(1.0)
-                        continue
-                    # keep preview for diagnostic error if all payloads fail
-                    if isinstance(result, dict):
-                        last_result_preview = f"keys={list(result.keys())}, done_reason={done_reason}"
-                    else:
-                        last_result_preview = str(result)[:300]
-                    break
+        for _ in range(2):
+            try:
+                resp = client.chat.completions.create(
+                    model=model,
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt},
+                    ],
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                    response_format={"type": "json_object"},
+                )
+                if not resp.choices:
+                    raise RuntimeError("Groq returned no choices")
+                content = resp.choices[0].message.content
+                if content and content.strip():
+                    return content
+                raise RuntimeError("Groq returned empty content")
+            except Exception as e:
+                recovered = _recover_json_from_failed_generation_error(e)
+                if recovered is not None:
+                    logger.warning(
+                        "Recovered Groq failed_generation payload by normalizing fractional numbers to decimals."
+                    )
+                    return recovered
+                last_err = e
+                time.sleep(0.7)
+                continue
 
-                except requests.exceptions.RequestException as e:
-                    last_err = e
-                    # retry same payload once for transient timeout, then try next payload
-                    if attempt == 0:
-                        time.sleep(1.0)
-                        continue
-                    break
-
-        raise RuntimeError(
-            f"Ollama request failed (tried messages and prompt payloads). "
-            f"Last error: {last_err}. Last response preview: {last_result_preview}. "
-            f"Ensure Ollama is running and accessible at {ollama_url}"
-        )
+        raise RuntimeError(f"Groq request failed after retries: {last_err}")
 
     return call
 
 
 class MealPlanner(Planner):
-    """
-    LLM-powered meal planner.
-
-    Parameters
-    ----------
-    llm_client : callable(system_prompt, user_prompt) -> str
-        Any function that accepts two strings and returns the LLM response text.
-        If *None*, a default OpenAI client is created from env vars.
-    """
-
     def __init__(self, llm_client: Optional[Callable[[str, str], str]] = None):
         if llm_client is not None:
             self._llm = llm_client
@@ -802,7 +948,8 @@ class MealPlanner(Planner):
                     base_prompt
                     + "\n\nIMPORTANT RETRY INSTRUCTION:\n"
                     + "Your previous response was invalid or truncated JSON. "
-                    + "Return one complete valid JSON object only, with all 7 days and grocery_list."
+                    + "Return one complete valid JSON object only, with all 7 days. "
+                    + "All numeric values must be JSON numbers (decimals allowed); never use fractions like 1/2 or 3/4."
                 )
 
             logger.info("Calling LLM for meal plan generation (attempt %s)…", attempt + 1)
@@ -824,50 +971,6 @@ class MealPlanner(Planner):
             f"Failed to parse LLM response as JSON after retries. Response preview:\n{response_text[:1000]}"
         ) from parse_error
 
-    def _generate_grocery_from_plan(
-        self,
-        plan: MealPlan,
-        recipes_by_id: Dict[int, Recipe],
-    ) -> GroceryList:
-        base_prompt = fill_in_grocery_prompt(plan, recipes_by_id)
-        parse_error: Optional[Exception] = None
-        response_text = ""
-
-        for attempt in range(2):
-            if attempt == 0:
-                user_prompt = base_prompt
-            else:
-                user_prompt = (
-                    base_prompt
-                    + "\n\nIMPORTANT RETRY INSTRUCTION:\n"
-                    + "Your previous response was invalid or incomplete JSON. "
-                    + "Return one complete valid JSON object containing grocery_list only."
-                )
-
-            logger.info("Calling LLM for grocery estimation (attempt %s)…", attempt + 1)
-            response_text = self._llm(GROCERY_SYSTEM_PROMPT, user_prompt)
-            logger.debug("LLM grocery response:\n%s", response_text)
-
-            if not response_text or not response_text.strip():
-                parse_error = RuntimeError("LLM returned empty grocery response text")
-                continue
-
-            try:
-                raw = extract_json(response_text)
-                grocery = parse_grocery_list(raw)
-                if grocery.items:
-                    return grocery
-                parse_error = RuntimeError("LLM grocery response had empty grocery_list")
-            except Exception as e:
-                parse_error = e
-                continue
-
-        raise RuntimeError(
-            f"Failed to parse grocery response as JSON after retries. Response preview:\n{response_text[:1000]}"
-        ) from parse_error
-
-    # --- public API ----------------------------------------------------------
-
     def generate_plan(
         self,
         profile: UserProfile,
@@ -888,36 +991,14 @@ class MealPlanner(Planner):
         raw, recipes_by_id = self._generate_raw(profile, candidates, nutrition_targets)
         plan = parse_meal_plan(raw, recipes_by_id)
         plan = enforce_meal_slot_compatibility(plan, candidates)
-        grocery = GroceryList(items=[])
-        try:
-            grocery = self._generate_grocery_from_plan(plan, recipes_by_id)
-        except Exception:
-            logger.exception("Dedicated grocery LLM step failed; trying fallback sources")
-            grocery = parse_grocery_list(raw)
-            if not grocery.items:
-                # final fallback: keep ingredient names, but avoid meal-count units
-                grocery_gen = SimpleGroceryGenerator()
-                fallback = grocery_gen.generate(plan, recipes_by_id)
-                grocery = GroceryList(
-                    items=[
-                        GroceryItem(
-                            name=item.name,
-                            quantity=None,
-                            unit=None,
-                            category=item.category,
-                        )
-                        for item in fallback.items
-                    ]
-                )
+        grocery_gen = SimpleGroceryGenerator()
+        grocery = grocery_gen.generate(plan, recipes_by_id)
         return plan, grocery
 
 
 
 
-# ---------------------------------------------------------------------------
-# Mock planner (no LLM needed)
-# ---------------------------------------------------------------------------
-
+# Mock planner for testing
 class MockMealPlanner(Planner):
     """
     Deterministic planner for tests and offline dev.
@@ -945,27 +1026,44 @@ class MockMealPlanner(Planner):
             pool_by_type[mt] = typed if typed else pool
 
         idx_by_type = {mt: 0 for mt in meal_types}
+        family_usage_by_type = {mt: {} for mt in meal_types}
+        prev_family_by_type = {mt: None for mt in meal_types}
         days: List[DayPlan] = []
         for d in range(1, 8):
             meals: List[PlannedMeal] = []
             used_today: set[int] = set()
+            used_families_today: set[str] = set()
             for mt in meal_types:
                 typed_pool = pool_by_type[mt]
                 if not typed_pool:
                     continue
 
-                # pick first not-yet-used-today recipe, otherwise cycle
                 start = idx_by_type[mt]
-                c = typed_pool[start % len(typed_pool)]
+                best_candidate = None
+                best_key = None
                 for offset in range(len(typed_pool)):
                     candidate = typed_pool[(start + offset) % len(typed_pool)]
-                    rid = candidate.recipe.recipe_id if candidate.recipe else None
-                    if rid is not None and rid not in used_today:
-                        c = candidate
-                        idx_by_type[mt] = start + offset + 1
-                        break
-                else:
-                    idx_by_type[mt] = start + 1
+                    r = candidate.recipe
+                    if r is None:
+                        continue
+
+                    rid = r.recipe_id
+                    fam = meal_family(r)
+
+                    key = (
+                        1 if rid in used_today else 0,
+                        1 if fam in used_families_today else 0,
+                        1 if prev_family_by_type[mt] is not None and fam == prev_family_by_type[mt] else 0,
+                        family_usage_by_type[mt].get(fam, 0),
+                        offset,
+                    )
+
+                    if best_key is None or key < best_key:
+                        best_key = key
+                        best_candidate = candidate
+
+                c = best_candidate or typed_pool[start % len(typed_pool)]
+                idx_by_type[mt] = start + 1
 
                 r = c.recipe
                 if r is None:
@@ -984,6 +1082,10 @@ class MockMealPlanner(Planner):
                     )
                 )
                 used_today.add(r.recipe_id)
+                fam = meal_family(r)
+                used_families_today.add(fam)
+                family_usage_by_type[mt][fam] = family_usage_by_type[mt].get(fam, 0) + 1
+                prev_family_by_type[mt] = fam
             days.append(DayPlan(day=d, meals=meals))
         plan = MealPlan(days=days, notes="Generated by MockMealPlanner")
         return enforce_meal_slot_compatibility(plan, candidates)
@@ -1001,16 +1103,5 @@ class MockMealPlanner(Planner):
             if c.recipe is not None
         }
         grocery_gen = SimpleGroceryGenerator()
-        fallback = grocery_gen.generate(plan, recipes_by_id)
-        grocery = GroceryList(
-            items=[
-                GroceryItem(
-                    name=item.name,
-                    quantity=None,
-                    unit=None,
-                    category=item.category,
-                )
-                for item in fallback.items
-            ]
-        )
+        grocery = grocery_gen.generate(plan, recipes_by_id)
         return plan, grocery

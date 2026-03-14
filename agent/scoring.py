@@ -1,22 +1,17 @@
 from __future__ import annotations
-
 from typing import List, Optional, Tuple
-
 from agent.interfaces import MealSlot, Recipe, UserPreferences, UserProfile
 
-# optional classifier so we can fall back to a learned model if rules
-# aren't sufficient.  The module will train itself on first import.
+# optional classifier so we can fall back to a learned model if rules aren't sufficient
 try:
     from agent.meal_type_classifier import predict_meal_type
-except ImportError:
+except Exception:
     predict_meal_type = lambda r: "lunchdinner"  # no classifier available
 
 BREAKFAST_INCLUDE = [
     "breakfast", "oat", "omelette", "pancake", "waffle", "toast",
     "parfait", "smoothie", "yogurt", "granola", "cereal", "muffin",
 ]
-
-# Additional excludes to keep obvious non-breakfast meals out
 BREAKFAST_EXCLUDE = [
     "steak", "burger", "curry", "biryani", "stir-fry", "stir fry", "pasta",
     "taco", "meatball", "bbq", "sandwich", "wrap", "salmon",
@@ -34,42 +29,56 @@ def _recipe_text(recipe: Recipe) -> str:
     return f"{title} {ingredients} {tags}".lower()
 
 
-def is_slot_compatible(recipe: Recipe, slot: Optional[MealSlot]) -> bool:
-    if slot is None:
-        return True
+def _slot_to_expected_labels(slot: MealSlot) -> set[str]:
+    if slot.meal_type == "breakfast":
+        return {"breakfast"}
+    if slot.meal_type in {"lunch", "dinner"}:
+        return {"lunchdinner", "main_meal"}
+    if slot.meal_type == "snack":
+        return {"snack", "dessert"}
+    return set()
+
+
+def _category_match(recipe: Recipe, slot: MealSlot) -> Optional[bool]:
+    if not recipe.category:
+        return None
+    return recipe.category.lower() in _slot_to_expected_labels(slot)
+
+
+def _classifier_match(recipe: Recipe, slot: MealSlot) -> Optional[bool]:
+    try:
+        pred = str(predict_meal_type(recipe) or "").strip().lower()
+    except Exception:
+        return None
+    if not pred:
+        return None
+    return pred in _slot_to_expected_labels(slot)
+
+
+def _text_analysis_match(recipe: Recipe, slot: MealSlot) -> bool:
     text = _recipe_text(recipe)
-    meal_type = slot.meal_type.lower()
+    breakfast_hits = sum(1 for k in BREAKFAST_INCLUDE if k in text)
+    breakfast_conflict = any(k in text for k in BREAKFAST_EXCLUDE)
+    lunch_dinner_conflict = any(k in text for k in LUNCH_DINNER_EXCLUDE)
 
-    # helper: check tags/cuisine path for explicit meal category
-    def has_breakfast_tag() -> bool:
-        if recipe.tags:
-            for t in recipe.tags:
-                if "breakfast" in str(t).lower():
-                    return True
-        if recipe.cuisine:
-            if "breakfast" in str(recipe.cuisine).lower():
-                return True
-        return False
+    if slot.meal_type == "breakfast":
+        return breakfast_hits > 0 and not breakfast_conflict
+    if slot.meal_type in {"lunch", "dinner"}:
+        return not (breakfast_hits > 0 and not breakfast_conflict) and not lunch_dinner_conflict
+    if slot.meal_type == "snack":
+        snack_terms = ("snack", "bar", "cookie", "brownie", "muffin", "granola", "smoothie")
+        return any(k in text for k in snack_terms)
+    return False
 
-    if meal_type == "breakfast":
-        # first, consult the classifier if present
-        if predict_meal_type(recipe) != "breakfast":
-            return False
 
-        # still apply rule-based keywords for extra safety
-        has_breakfast_signal = has_breakfast_tag() or any(k in text for k in BREAKFAST_INCLUDE)
-        has_non_breakfast_signal = any(k in text for k in BREAKFAST_EXCLUDE)
-        return has_breakfast_signal and not has_non_breakfast_signal
+def is_slot_compatible(recipe: Recipe, slot: MealSlot) -> bool:
+    category_signal = _category_match(recipe, slot)
+    if category_signal is not None:
+        return category_signal
 
-    if meal_type in ("lunch", "dinner"):
-        # classifier may collapse lunch/dinner into same bucket; if it says breakfast, we must reject
-        if predict_meal_type(recipe) == "breakfast":
-            return False
-
-        has_light_breakfast_signal = any(k in text for k in LUNCH_DINNER_EXCLUDE)
-        return not has_light_breakfast_signal
-
-    return True
+    classifier_signal = _classifier_match(recipe, slot)
+    text_signal = _text_analysis_match(recipe, slot)
+    return bool(classifier_signal is True or text_signal)
 
 
 def meal_type_score(recipe: Recipe, slot: Optional[MealSlot]) -> Tuple[float, List[str]]:
@@ -81,10 +90,6 @@ def meal_type_score(recipe: Recipe, slot: Optional[MealSlot]) -> Tuple[float, Li
 
 
 def estimate_calories(recipe: Recipe) -> Optional[float]:
-    """
-    If calories are missing but macros exist, estimate:
-    kcal ≈ 4*protein + 4*carbs + 9*fat
-    """
     if recipe.calories is not None:
         return recipe.calories
     if recipe.protein_g is None or recipe.carbs_g is None or recipe.fat_g is None:
@@ -93,10 +98,6 @@ def estimate_calories(recipe: Recipe) -> Optional[float]:
 
 
 def score_recipe(profile: UserProfile, recipe: Recipe, prefs: Optional[UserPreferences] = None, slot: Optional[MealSlot] = None) -> Tuple[float, List[str]]:
-    """
-    Main scoring function: returns (score, reasons).
-    Higher score = better recommendation.
-    """
     score = 0.0
     reasons: List[str] = []
 
@@ -110,7 +111,7 @@ def score_recipe(profile: UserProfile, recipe: Recipe, prefs: Optional[UserPrefe
     score += t_score
     reasons += t_reasons
 
-    # 3) dietary preference tags (light boost; hard constraints should be filtered elsewhere)
+    # 3) dietary preference tags 
     d_score, d_reasons = diet_tag_score(profile, recipe)
     score += d_score
     reasons += d_reasons
@@ -131,16 +132,12 @@ def score_recipe(profile: UserProfile, recipe: Recipe, prefs: Optional[UserPrefe
     score += mt_score
     reasons += mt_reasons
 
-    # keep reasons readable
     reasons = dedupe(reasons)
 
     return score, reasons
 
 
 def goal_score(profile: UserProfile, recipe: Recipe) -> Tuple[float, List[str]]:
-    """
-    Goal-aware scoring based on calories/macros.
-    """
     reasons: List[str] = []
     s = 0.0
 
@@ -192,7 +189,7 @@ def goal_score(profile: UserProfile, recipe: Recipe) -> Tuple[float, List[str]]:
 
         # don’t punish calories too hard here
         if calories is not None and calories < 350:
-            s -= 0.5  # might be too light
+            s -= 0.5 
     else:
         # maintenance: balanced macros preferred
         if protein >= 20:
@@ -206,9 +203,6 @@ def goal_score(profile: UserProfile, recipe: Recipe) -> Tuple[float, List[str]]:
 
 
 def time_score(profile: UserProfile, recipe: Recipe) -> Tuple[float, List[str]]:
-    """
-    Cooking time alignment with profile.cooking_time.
-    """
     reasons: List[str] = []
     s = 0.0
 
@@ -216,7 +210,7 @@ def time_score(profile: UserProfile, recipe: Recipe) -> Tuple[float, List[str]]:
     total = recipe.total_minutes
 
     if total is None:
-        return 0.0, []  # don’t score if unknown for MVP
+        return 0.0, []  
 
     # interpret categories
     if "short" in pref or "<" in pref:
@@ -235,22 +229,17 @@ def time_score(profile: UserProfile, recipe: Recipe) -> Tuple[float, List[str]]:
             s -= 0.5
     elif "long" in pref:
         if total >= 45:
-            s += 0.5  # user is okay with longer meals
+            s += 0.5  
     return s, reasons
 
 
 def diet_tag_score(profile: UserProfile, recipe: Recipe) -> Tuple[float, List[str]]:
-    """
-    Soft scoring based on dietary preferences and recipe tags.
-    Hard filtering should be done in constraints.py.
-    """
     reasons: List[str] = []
     s = 0.0
 
     prefs = [p.lower() for p in profile.dietary_preferences]
     tags = [t.lower() for t in recipe.tags]
 
-    # small boosts if tags match what user wants
     for pref in prefs:
         if pref in tags:
             s += 0.5
@@ -260,9 +249,6 @@ def diet_tag_score(profile: UserProfile, recipe: Recipe) -> Tuple[float, List[st
 
 
 def preference_score(profile: UserProfile, recipe: Recipe, prefs: UserPreferences) -> Tuple[float, List[str]]:
-    """
-    Learned preferences from like/dislike history.
-    """
     if prefs is None:
         return 0, []
     reasons: List[str] = []
@@ -272,11 +258,13 @@ def preference_score(profile: UserProfile, recipe: Recipe, prefs: UserPreference
 
     if recipe.recipe_id in prefs.disliked_recipes_ids:
         return -6.0, ["you previously disliked this recipe"]
-    
+
+    if recipe.recipe_id in prefs.doesnt_fit_recipes_ids:
+        return -4.0, ["you said this didn't fit"]
+
     if recipe.recipe_id in prefs.liked_recipes_ids:
         return 3.0, ["you previously liked this recipe"]
 
-    # cuisine
     if recipe.cuisine:
         w = prefs.cuisine_weights.get(recipe.cuisine.lower(), 0.0)
         if w != 0:
@@ -284,7 +272,6 @@ def preference_score(profile: UserProfile, recipe: Recipe, prefs: UserPreference
             if w > 0:
                 reasons.append("matches cuisines you liked")
 
-    # tags
     for tag in recipe.tags:
         w = prefs.tag_weights.get(tag.lower(), 0.0)
         if w != 0:
@@ -292,7 +279,6 @@ def preference_score(profile: UserProfile, recipe: Recipe, prefs: UserPreference
             if w > 0:
                 reasons.append("similar to recipes you liked")
 
-    #ingredient preference learning from feedback
     ingredient_matches = 0
 
     for ing in recipe.ingredients[:10]:
@@ -311,10 +297,6 @@ def preference_score(profile: UserProfile, recipe: Recipe, prefs: UserPreference
 
 
 def disliked_penalty(profile: UserProfile, recipe: Recipe) -> Tuple[float, List[str]]:
-    """
-    Penalize recipes containing disliked ingredients from profile.
-    (Feedback dislikes will be handled in prefs weights, but this is user-stated dislikes.)
-    """
     reasons: List[str] = []
     s = 0.0
 

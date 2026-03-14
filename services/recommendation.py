@@ -8,7 +8,7 @@ from models import Recipe as RecipeORM
 from services.embedding_retrieval import EmbeddingIndex
 from agent.constraints import filter_allowed  
 from agent.scoring import score_recipe       
-from agent.mock_store import get_user_preferences
+from agent.feedback import get_user_preferences
 
 from agent.adapters import orm_to_agent_recipe  
 
@@ -18,16 +18,21 @@ _embedding_index = EmbeddingIndex()
 
 def recommend_for_profile(
     db: Session,
-    username: str,
     profile: UserProfileCreate,
     slot: MealSlot,
+    username: str | None = None,
     targets: Optional[NutritionTargets] = None,
     k: int = 10,
     top_n: int = 200,
+    user_id: int | None = None,
 ) -> RecommendationResponse:
     """
     ML retrieval (embeddings) + reranking (rules + prefs).
     """
+    effective_username = username or getattr(profile, "username", None)
+    if effective_username is None and user_id is not None:
+        effective_username = str(user_id)
+
     recipes_orm: List[RecipeORM] = db.query(RecipeORM).all()
 
     retrieved = _embedding_index.search(recipes_orm, profile, slot=slot, top_n=top_n)  # (orm_recipe, sim)
@@ -37,15 +42,16 @@ def recommend_for_profile(
     filtered_pairs = []
     for ar, sim in agent_recipes:
         filtered_pairs.append((ar, sim))
-    allowed_only = filter_allowed(profile_to_agent_profile(profile, username), [r for r, _ in filtered_pairs])
+    allowed_only = filter_allowed(profile_to_agent_profile(profile, effective_username or "user"), [r for r, _ in filtered_pairs])
     allowed_set = {r.recipe_id for r in allowed_only}
     filtered_pairs = [(r, sim) for (r, sim) in filtered_pairs if r.recipe_id in allowed_set]
 
-    prefs = get_user_preferences(username)
+    prefs_user_id = user_id if user_id is not None else effective_username
+    prefs = get_user_preferences(prefs_user_id)
 
     candidates: List[RecipeCandidate] = []
     for r, sim in filtered_pairs:
-        s, reasons = score_recipe(profile_to_agent_profile(profile, username), r, prefs=prefs, slot=slot)
+        s, reasons = score_recipe(profile_to_agent_profile(profile, effective_username or "user"), r, prefs=prefs, slot=slot)
 
         final_score = 0.6 * sim + 0.4 * s
 
@@ -68,7 +74,7 @@ def recommend_for_profile(
 def profile_to_agent_profile(profile: UserProfileCreate, username: str):
     from agent.interfaces import UserProfile as AgentProfile
     return AgentProfile(
-        user_id=username,
+        username=str(username),
         age=profile.age,
         height_feet=profile.height_feet,
         height_inches=profile.height_inches,

@@ -8,7 +8,7 @@ Base.metadata.create_all(bind=engine)
 
 GENDERS = ["female", "male", "other"]
 GOALS = ["weight loss", "maintenance", "high protein"]
-DIETARY_OPTIONS = ["vegetarian", "vegan", "pescaterian", "low carb", "keto"]
+DIETARY_OPTIONS = ["vegetarian", "vegan", "pescatarian", "low carb", "keto"]
 ALLERGIES = ["nuts", "dairy", "gluten", "soy", "eggs"]
 MEDICAL_CONDITIONS = ["diabetes", "hypertension", "celiac", "high cholesterol"]
 BUDGET_LEVELS = ["low", "medium", "high"]

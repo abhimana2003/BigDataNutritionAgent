@@ -4,13 +4,13 @@ import requests
 from typing import Dict, Any, List
 
 API_URL = "http://localhost:8000/profiles"
-
+# Shows a prefilled profile form for the given username.
+# If username exists in backend, fetches existing data.
 def profile_form(prefilled_username: str = None) -> None:
-    """
-    Shows a prefilled profile form for the given username.
-    If username exists in backend, fetches existing data.
-    """
-    st.subheader("Profile Settings")
+    st.title("Profile Settings")
+    if st.session_state.get("profile_updated_success"):
+        st.success("Profile updated successfully.")
+        st.session_state["profile_updated_success"] = False
 
     username = prefilled_username or st.text_input("Username", key="profile_username")
     if not username:
@@ -53,16 +53,23 @@ def profile_form(prefilled_username: str = None) -> None:
                             index=goal_opts.index(existing.get("goal", "")) if existing.get("goal") else 0,
                             key="goal")
 
-        dietary_opts = ["None", "Vegetarian", "Vegan", "Pescaterian", "Low Carb", "Keto"]
+        dietary_opts = ["None", "Vegetarian", "Vegan", "Pescatarian", "Low Carb", "Keto"]
         allergies_opts = ["None", "Nuts", "Dairy", "Gluten", "Soy", "Eggs"]
         medical_opts = ["None", "Diabetes", "Hypertension", "Celiac", "High Cholesterol"]
 
         dietary = st.multiselect("Dietary Preferences", dietary_opts,
                                  default=existing.get("dietary_preferences", []), key="dietary")
+        allergies_default = existing.get("allergies", [])
+        if not allergies_default:
+            allergies_default = ["None"]
+        medical_default = existing.get("medical_conditions", [])
+        if not medical_default:
+            medical_default = ["None"]
+
         allergies = st.multiselect("Allergies", allergies_opts,
-                                   default=existing.get("allergies", []), key="allergies")
+                                   default=allergies_default, key="allergies")
         medical = st.multiselect("Medical Conditions", medical_opts,
-                                 default=existing.get("medical_conditions", []), key="medical")
+                                 default=medical_default, key="medical")
 
         budget = st.number_input("Weekly Grocery Budget ($)",
                                  min_value=0.0,
@@ -77,7 +84,7 @@ def profile_form(prefilled_username: str = None) -> None:
                                     index=cook_opts.index(existing.get("cooking_time", "")) if existing.get("cooking_time") else 0,
                                     key="cooking_time")
 
-        submitted = st.form_submit_button("Submit Profile")
+        submitted = st.form_submit_button("Update Profile")
 
     if submitted:
         errors: List[str] = []
@@ -156,8 +163,12 @@ def profile_form(prefilled_username: str = None) -> None:
             else:
                 r = requests.post(API_URL, json=payload)
             r.raise_for_status()
-            st.success("Profile saved successfully!")
+            st.session_state["profile_updated_success"] = True
             st.session_state["logged_in_user"] = username
+            st.session_state["needs_plan_refresh"] = True
+            st.session_state["is_first_plan_generation"] = False
+            st.session_state["last_mealplan"] = None
+            st.session_state["last_mealplan_user"] = None
             st.session_state["active_page"] = "meal"
             st.rerun()
         except requests.exceptions.HTTPError as e:

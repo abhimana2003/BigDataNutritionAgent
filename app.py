@@ -1,5 +1,8 @@
 import streamlit as st
 import requests
+import time
+import threading
+from concurrent.futures import ThreadPoolExecutor, Future
 from typing import List, Dict, Any
 from html import escape
 from profile_editor import profile_form
@@ -51,6 +54,85 @@ def apply_warm_theme() -> None:
             color: var(--text);
             font-family: "Source Sans 3", sans-serif;
           }
+
+          .stApp * {
+            animation: none !important;
+            transition: none !important;
+          }
+
+          .recipe-detail-box {
+            margin: -10px 0 14px;
+            padding: 1rem 1.1rem;
+            border: 1px solid var(--line);
+            border-top: 0;
+            border-radius: 0 0 16px 16px;
+            background: #fff6ea;
+            box-shadow: 0 10px 18px rgba(52, 35, 20, 0.06);
+          }
+
+          .recipe-detail-meta {
+            margin: 0.35rem 0 0.65rem;
+            color: var(--muted);
+            font-size: 1.02rem;
+          }
+
+          .recipe-detail-box h4 {
+            margin: 0.5rem 0 0.35rem;
+            font-family: "Playfair Display", Georgia, serif;
+          }
+
+          .recipe-detail-box ul {
+            margin: 0.2rem 0 0.6rem 1.1rem;
+          }
+
+          input[type="password"]::-ms-reveal,
+          input[type="password"]::-ms-clear {
+            display: none;
+          }
+
+          input[type="password"]::-webkit-credentials-auto-fill-button,
+          input[type="password"]::-webkit-contacts-auto-fill-button {
+            visibility: hidden;
+            pointer-events: none;
+          }
+
+          .nutrition-targets {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+            gap: 0.6rem;
+            margin: 0.75rem 0 1rem;
+          }
+
+          .nutrition-target {
+            background: #fffaf2;
+            border: 1px solid var(--line);
+            border-radius: 14px;
+            padding: 0.7rem 0.85rem;
+            box-shadow: 0 6px 14px rgba(52, 35, 20, 0.06);
+            text-align: left;
+          }
+
+          .nutrition-target .label {
+            color: var(--muted);
+            font-size: 0.85rem;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+          }
+
+          .nutrition-target .value {
+            font-family: "Playfair Display", Georgia, serif;
+            font-size: 1.5rem;
+            color: var(--text);
+            margin-top: 0.2rem;
+          }
+
+          .nutrition-target .value span {
+            font-family: "Source Sans 3", sans-serif;
+            font-size: 0.9rem;
+            color: var(--muted);
+            margin-left: 0.2rem;
+          }
+
 
           [data-testid="stHeader"],
           [data-testid="stToolbar"],
@@ -315,6 +397,13 @@ def apply_warm_theme() -> None:
     )
 
 
+def transient_success(message: str, seconds: float = 2.0) -> None:
+    slot = st.empty()
+    slot.success(message)
+    time.sleep(seconds)
+    slot.empty()
+
+
 apply_warm_theme()
 
 # Helper functions
@@ -378,6 +467,10 @@ def request_replacement(
     exclude_recipe_ids: List[int],
 ) -> Dict[str, Any]:
     try:
+        week_start = None
+        cached = st.session_state.get("last_mealplan") or {}
+        if isinstance(cached, dict):
+            week_start = cached.get("week_start")
         resp = requests.post(
             f"{API_URL}/{username}/replace-meal",
             json={
@@ -385,6 +478,7 @@ def request_replacement(
                 "meal_type": meal_type,
                 "current_recipe_id": current_recipe_id,
                 "exclude_recipe_ids": exclude_recipe_ids,
+                "week_start": week_start,
             },
             timeout=30,
         )
@@ -397,6 +491,121 @@ def request_replacement(
         st.error(f"Replacement request failed: {e}")
         return {}
 
+
+def save_mealplan(username: str, plan: Dict[str, Any]) -> Dict[str, Any]:
+    try:
+        resp = requests.post(
+            f"{API_URL}/{username}/mealplan/save",
+            json={"meal_plan": plan},
+            timeout=30,
+        )
+        if resp.status_code == 200:
+            return resp.json()
+        detail = resp.json().get("detail", "Unknown error")
+        st.error(f"Meal plan save failed: {detail}")
+        return {}
+    except requests.RequestException as e:
+        st.error(f"Meal plan save failed: {e}")
+        return {}
+
+
+def request_grocery_refresh(username: str, days: List[Dict[str, Any]]) -> Dict[str, Any]:
+    try:
+        resp = requests.post(
+            f"{API_URL}/{username}/grocerylist",
+            json={"days": days},
+            timeout=60,
+        )
+        if resp.status_code == 200:
+            return {"ok": True, "data": resp.json()}
+        detail = resp.json().get("detail", "Unknown error")
+        return {"ok": False, "error": f"Grocery refresh failed: {detail}"}
+    except requests.RequestException as e:
+        return {"ok": False, "error": f"Grocery refresh request failed: {e}"}
+
+
+_grocery_executor = ThreadPoolExecutor(max_workers=2)
+_grocery_lock = threading.Lock()
+
+
+def enqueue_grocery_refresh(username: str, days: List[Dict[str, Any]]) -> None:
+    with _grocery_lock:
+        existing: Future | None = st.session_state.get("grocery_refresh_future")
+        if existing and not existing.done():
+            st.session_state["pending_grocery_refresh"] = {"username": username, "days": days}
+            return
+        st.session_state["grocery_refresh_future"] = _grocery_executor.submit(
+            request_grocery_refresh,
+            username,
+            days,
+        )
+
+
+def poll_grocery_refresh() -> None:
+    future: Future | None = st.session_state.get("grocery_refresh_future")
+    if not future or not future.done():
+        return
+    try:
+        result = future.result()
+    except Exception:
+        st.session_state["grocery_refresh_future"] = None
+        return
+    st.session_state["grocery_refresh_future"] = None
+    _apply_grocery_refresh_result(result)
+    pending = st.session_state.pop("pending_grocery_refresh", None)
+    if pending:
+        st.session_state["grocery_refresh_future"] = _grocery_executor.submit(
+            request_grocery_refresh,
+            pending.get("username"),
+            pending.get("days", []),
+        )
+
+
+def _apply_grocery_refresh_result(result: Dict[str, Any]) -> bool:
+    if not result:
+        return False
+    if not result.get("ok"):
+        st.session_state["grocery_refresh_error"] = result.get("error", "Unable to refresh grocery list.")
+        return False
+    payload = result.get("data") or {}
+    items = payload.get("items") or []
+    text = payload.get("text")
+    if not items and not text:
+        st.session_state["grocery_refresh_error"] = "Grocery service returned an empty list."
+        return False
+    gp = st.session_state.get("last_mealplan") or {}
+    gp["grocery_list"] = items
+    gp["grocery_text"] = text
+    st.session_state["last_mealplan"] = gp
+    st.session_state["grocery_refresh_error"] = None
+    return True
+
+
+def refresh_grocery_now(username: str, days: List[Dict[str, Any]]) -> bool:
+    with st.spinner("Updating grocery list…"):
+        result = request_grocery_refresh(username, days)
+    return _apply_grocery_refresh_result(result)
+
+
+def _build_local_grocery_fallback(days: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    merged: Dict[str, Dict[str, Any]] = {}
+    for day in days or []:
+        for meal in day.get("meals", []) or []:
+            rid = meal.get("recipe_id")
+            if rid is None:
+                continue
+            detail = fetch_recipe(int(rid), show_error=False)
+            ingredients = detail.get("ingredients") or []
+            for ing in ingredients:
+                name = str(ing).strip()
+                if not name:
+                    continue
+                key = name.lower()
+                if key not in merged:
+                    merged[key] = {"name": name, "quantity": 1, "unit": None}
+                else:
+                    merged[key]["quantity"] = int(merged[key].get("quantity") or 0) + 1
+    return list(merged.values())
 
 def _meal_calories(meal: Dict[str, Any]) -> int:
     nutrition = meal.get("meal_nutrition") or {}
@@ -486,51 +695,51 @@ def _render_grocery_preview(data: Dict[str, Any]) -> None:
 
 # Profile Form
 def show_profile_form(prefilled_username=None) -> None:
+    if st.button("← Back to Login", key="back_to_login", type="secondary"):
+        st.session_state["creating_profile"] = False
+        st.session_state["current_view"] = "login"
+        st.rerun()
     st.title("Create Your Profile")
-
-    default_username = prefilled_username or ""
-    username = st.text_input("Username", value=default_username, key="profile_username_create")
-    full_name = st.text_input("Full Name", key="profile_full_name_create")
-    email = st.text_input("Email", key="profile_email_create")
-    password = st.text_input("Password", type="password", key="profile_password_create")
-
-    if not username:
-        st.info("Please enter a username")
-        return
 
     edit_id = None
     existing = {}  
 
-    with st.form("profile_form"):
-        age = st.text_input("Age", value=str(existing.get("age", "")), key="age")
+    with st.form("create_profile_form"):
+        default_username = prefilled_username or ""
+        username = st.text_input("Username", value=default_username, key="profile_username_create")
+        full_name = st.text_input("Full Name", key="profile_full_name_create")
+        email = st.text_input("Email", key="profile_email_create")
+        password = st.text_input("Password", type="password", key="profile_password_create")
+
+        age = st.text_input("Age", value=str(existing.get("age", "")), key="age_create")
         st.subheader("Height")
         feet, inches = st.columns(2)
         with feet:
-            heightFt = st.text_input("Feet", value=str(existing.get("height_feet", "")), key="height_feet")
+            heightFt = st.text_input("Feet", value=str(existing.get("height_feet", "")), key="height_feet_create")
         with inches:
-            heightIn = st.text_input("Height (inches)", value=str(existing.get("height_inches", "")), key="height_inches")
-        weight = st.text_input("Weight (lbs)", value=str(existing.get("weight", "")), key="weight")
+            heightIn = st.text_input("Height (inches)", value=str(existing.get("height_inches", "")), key="height_inches_create")
+        weight = st.text_input("Weight (lbs)", value=str(existing.get("weight", "")), key="weight_create")
 
         gender_opts = ["", "Female", "Male", "Other"]
         gender = st.selectbox("Gender", gender_opts,
                               index=gender_opts.index(existing.get("gender", "")) if existing.get("gender") else 0,
-                              key="gender")
+                              key="gender_create")
 
         goal_opts = ["", "weight loss", "maintenance", "high protein"]
         goal = st.selectbox("Goal", goal_opts,
                             index=goal_opts.index(existing.get("goal", "")) if existing.get("goal") else 0,
-                            key="goal")
+                            key="goal_create")
 
-        dietary_opts = ["None", "Vegetarian", "Vegan", "Pescaterian", "Low Carb", "Keto"]
+        dietary_opts = ["None", "Vegetarian", "Vegan", "Pescatarian", "Low Carb", "Keto"]
         allergies_opts = ["None", "Nuts", "Dairy", "Gluten", "Soy", "Eggs"]
         medical_opts = ["None", "Diabetes", "Hypertension", "Celiac", "High Cholesterol"]
 
         dietary = st.multiselect("Dietary Preferences", dietary_opts,
-                                 default=existing.get("dietary_preferences", []), key="dietary")
+                                 default=existing.get("dietary_preferences", []), key="dietary_create")
         allergies = st.multiselect("Allergies", allergies_opts,
-                                   default=existing.get("allergies", []), key="allergies")
+                                   default=existing.get("allergies", []), key="allergies_create")
         medical = st.multiselect("Medical Conditions", medical_opts,
-                                 default=existing.get("medical_conditions", []), key="medical")
+                                 default=existing.get("medical_conditions", []), key="medical_create")
 
         # Budget input as float
         budget = st.number_input("Weekly Grocery Budget ($)",
@@ -539,12 +748,12 @@ def show_profile_form(prefilled_username=None) -> None:
                                  value=float(existing.get("budget_level", 0) or 0),
                                  step=1.0,
                                  format="%.2f",
-                                 key="budget")
+                                 key="budget_create")
 
         cook_opts = ["", "short (<30 mins)", "medium (30-60 min)", "long (>60 mins)"]
         cooking_time = st.selectbox("Cooking Time", cook_opts,
                                     index=cook_opts.index(existing.get("cooking_time", "")) if existing.get("cooking_time") else 0,
-                                    key="cooking_time")
+                                    key="cooking_time_create")
 
         submitted = st.form_submit_button("Submit Profile")
 
@@ -638,11 +847,35 @@ def show_profile_form(prefilled_username=None) -> None:
 
             # Set session state to show tabs after creation
             st.session_state["logged_in_user"] = username.strip()
+            st.session_state["had_successful_login"] = True
             st.session_state["creating_profile"] = False
+            st.session_state["current_view"] = "mainApp"
             st.session_state["active_page"] = "meal"
             st.session_state["needs_plan_refresh"] = True
+            st.session_state["is_first_plan_generation"] = True
+            st.session_state["pending_initial_generation"] = True
             st.session_state["last_mealplan"] = None
             st.session_state["last_mealplan_user"] = None
+            st.session_state["new_username"] = None
+            st.session_state["post_create_flush"] = True
+            for key in [
+                "profile_username_create",
+                "profile_full_name_create",
+                "profile_email_create",
+                "profile_password_create",
+                "age_create",
+                "height_feet_create",
+                "height_inches_create",
+                "weight_create",
+                "gender_create",
+                "goal_create",
+                "dietary_create",
+                "allergies_create",
+                "medical_create",
+                "budget_create",
+                "cooking_time_create",
+            ]:
+                st.session_state.pop(key, None)
             st.rerun()
 
         except requests.exceptions.HTTPError as e:
@@ -653,10 +886,9 @@ def show_login_page():
     st.title("Nutrition AI Agent Login")
     username = st.text_input("Username", key="login_username")
     password = st.text_input("Password", type="password", key="login_password")
-    col1, col2 = st.columns(2)
-
-    with col1:
-        if st.button("Log In"):
+    left_btn, spacer_btn, right_btn = st.columns([0.7, 0.15, 0.15], gap="small")
+    with left_btn:
+        if st.button("Log In", key="login_submit"):
             try:
                 if not username or not password:
                     st.error("Please enter both username and password.")
@@ -664,49 +896,145 @@ def show_login_page():
                 res = requests.post(AUTH_URL, json={"username": username, "password": password})
                 if res.status_code == 200:
                     st.session_state["logged_in_user"] = username.strip()
+                    st.session_state["had_successful_login"] = True
+                    st.session_state["current_view"] = "mainApp"
                     st.session_state["active_page"] = "meal"
-                    st.session_state["needs_plan_refresh"] = True
+                    st.session_state["needs_plan_refresh"] = False
+                    st.session_state["is_first_plan_generation"] = False
+                    st.session_state["pending_initial_generation"] = False
                     st.session_state["last_mealplan"] = None
                     st.session_state["last_mealplan_user"] = None
-                    st.success("Logged in successfully!")
                     st.rerun()
                 else:
                     st.error("Invalid username or password")
             except requests.RequestException:
                 st.error("Server error")
-
-    with col2:
-        if st.button("Create New Profile"):
+    with right_btn:
+        if st.button("Create New Profile", key="login_create_profile", use_container_width=True):
             st.session_state["creating_profile"] = True
+            st.session_state["current_view"] = "createProfile"
             st.session_state["new_username"] = username.strip()
             st.rerun()
 
 # Meal Plan Page
 def show_mealplan_page() -> None:
-    st.title("Nutrition AI Agent — Meal Plan")
+    st.title("Weekly Meal Plan")
 
     username = st.session_state.get("logged_in_user")
     if not username:
         st.info("Please log in first")
         return
 
-    cached = st.session_state.get("last_mealplan")
-    cached_user = st.session_state.get("last_mealplan_user")
-    needs_refresh = st.session_state.get("needs_plan_refresh", False)
+    poll_grocery_refresh()
 
-    if needs_refresh or not cached or cached_user != username:
+    loading_placeholder = st.empty()
+    if st.button("Generate Next Week", type="secondary"):
         try:
-            resp = requests.get(f"{API_URL}/{username}/mealplan")
+            st.session_state["mealplan_generation_in_progress"] = True
+            with loading_placeholder.container():
+                st.info("Generating next week's meal plan…")
+            resp = requests.get(
+                f"{API_URL}/{username}/mealplan",
+                params={"next_week": "true", "force": "true"},
+            )
             resp.raise_for_status()
             data = resp.json()
             st.session_state["last_mealplan"] = data
             st.session_state["last_mealplan_user"] = username
             st.session_state["needs_plan_refresh"] = False
+            st.session_state["is_first_plan_generation"] = False
+            if not data.get("grocery_list") and not data.get("grocery_text"):
+                refresh_grocery_now(username, data.get("days", []))
+            data_after_refresh = st.session_state.get("last_mealplan") or data
+            has_grocery = bool(data_after_refresh.get("grocery_list") or data_after_refresh.get("grocery_text"))
+            if has_grocery:
+                st.session_state["pending_initial_generation"] = False
+            loading_placeholder.empty()
+            st.success("Generated next week's meal plan.")
+            st.rerun()
         except requests.RequestException as e:
+            loading_placeholder.empty()
+            st.error(f"Failed to generate next week's meal plan: {e}")
+        finally:
+            st.session_state["mealplan_generation_in_progress"] = False
+
+    cached = st.session_state.get("last_mealplan")
+    cached_user = st.session_state.get("last_mealplan_user")
+    needs_refresh = st.session_state.get("needs_plan_refresh", False)
+    is_first_plan_generation = st.session_state.get("is_first_plan_generation", False)
+
+    if needs_refresh or not cached or cached_user != username:
+        try:
+            st.session_state["mealplan_generation_in_progress"] = True
+            with loading_placeholder.container():
+                if needs_refresh:
+                    if is_first_plan_generation:
+                        st.info("Generating your meal plan…")
+                    else:
+                        st.info("Your profile changed — regenerating your plan…")
+                else:
+                    st.info("Loading your meal plan…")
+
+            params = {"force": "true"} if needs_refresh else {}
+            resp = requests.get(f"{API_URL}/{username}/mealplan",params=params)
+            resp.raise_for_status()
+
+            data = resp.json()
+            st.session_state["last_mealplan"] = data
+            st.session_state["last_mealplan_user"] = username
+            st.session_state["needs_plan_refresh"] = False
+            st.session_state["is_first_plan_generation"] = False
+            if not data.get("grocery_list") and not data.get("grocery_text"):
+                refresh_grocery_now(username, data.get("days", []))
+            data_after_refresh = st.session_state.get("last_mealplan") or data
+            has_grocery = bool(data_after_refresh.get("grocery_list") or data_after_refresh.get("grocery_text"))
+            if has_grocery:
+                st.session_state["pending_initial_generation"] = False
+            loading_placeholder.empty()
+
+        except requests.RequestException as e:
+            loading_placeholder.empty()
             st.error(f"Failed to generate meal plan: {e}")
+        finally:
+            st.session_state["mealplan_generation_in_progress"] = False
 
     cached = st.session_state.get("last_mealplan")
     if cached:
+        targets = cached.get("nutrition_targets") or {}
+        cals = targets.get("daily_calories")
+        protein = targets.get("protein_g")
+        carbs = targets.get("carbs_g")
+        fat = targets.get("fat_g")
+        if any(v is not None for v in (cals, protein, carbs, fat)):
+            st.markdown('<div class="daily-meals-title">Nutrition Goals</div>', unsafe_allow_html=True)
+            def _fmt(val):
+                if val is None:
+                    return "—"
+                return str(int(val)) if isinstance(val, (int, float)) else str(val)
+
+            st.markdown(
+                f"""
+                <div class="nutrition-targets">
+                  <div class="nutrition-target">
+                    <div class="label">Calories</div>
+                    <div class="value">{_fmt(cals)}<span> kcal</span></div>
+                  </div>
+                  <div class="nutrition-target">
+                    <div class="label">Protein</div>
+                    <div class="value">{_fmt(protein)}<span> g</span></div>
+                  </div>
+                  <div class="nutrition-target">
+                    <div class="label">Carbs</div>
+                    <div class="value">{_fmt(carbs)}<span> g</span></div>
+                  </div>
+                  <div class="nutrition-target">
+                    <div class="label">Fat</div>
+                    <div class="value">{_fmt(fat)}<span> g</span></div>
+                  </div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
         display_mealplan(cached)
 
 def display_mealplan(data: Dict[str, Any]) -> None:
@@ -716,101 +1044,222 @@ def display_mealplan(data: Dict[str, Any]) -> None:
         return
 
     st.markdown('<div class="daily-meals-title">Daily Meals</div>', unsafe_allow_html=True)
-    day_numbers = [int(day.get("day")) for day in days if day.get("day") is not None]
-    selected_day = st.radio(
-        "Day",
-        day_numbers,
-        horizontal=True,
-        key="selected_day",
-        label_visibility="collapsed",
+    day_labels = {
+        1: "Monday",
+        2: "Tuesday",
+        3: "Wednesday",
+        4: "Thursday",
+        5: "Friday",
+        6: "Saturday",
+        7: "Sunday",
+    }
+    sorted_days = sorted(
+        [d for d in days if d.get("day") is not None],
+        key=lambda d: int(d.get("day")),
     )
-    day_data = next((d for d in days if int(d.get("day", -1)) == int(selected_day)), days[0])
+    tab_names = [day_labels.get(int(day.get("day")), f"Day {int(day.get('day'))}") for day in sorted_days]
+    tabs = st.tabs(tab_names)
 
-    for idx, meal in enumerate(day_data.get("meals", [])):
-        meal_type = str(meal.get("meal_type", "")).capitalize()
-        title = meal.get("title", "Untitled meal")
-        recipe_id = meal.get("recipe_id")
-        calories = _meal_calories(meal)
-        detail = fetch_recipe(int(recipe_id), show_error=False) if recipe_id is not None else {}
-        image_url = detail.get("image_url")
-        image_html = ""
-        if image_url:
-            image_html = (
-                '<div class="meal-thumb-wrap">'
-                f'<img src="{escape(image_url)}" alt="{escape(title)}" width="190" />'
-                "</div>"
-            )
-
-        cal_text = f"{calories} cal" if calories > 0 else "Meal"
-        st.markdown(
-            f"""
-            <div class="daily-meal-card">
-              <div style="display:flex; justify-content:space-between; gap:0.9rem; align-items:center;">
-                <div style="flex:1; min-width:0;">
-                  <h3 class="meal-type-title">{escape(meal_type)}</h3>
-                  <p class="meal-name">{escape(title)}</p>
-                  <span class="meal-cal-pill">{escape(cal_text)}</span>
-                </div>
-                <div>{image_html}</div>
-              </div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-        act_like, act_replace, act_dislike, act_open = st.columns([1, 1.1, 1.2, 1.4])
-
-        with act_like:
-            if st.button("Like", key=f"meal_like_{selected_day}_{idx}_{recipe_id}", type="secondary"):
-                if recipe_id is None:
-                    st.error("Cannot like a meal without recipe id.")
-                elif submit_feedback(st.session_state.get("logged_in_user"), int(recipe_id), "like"):
-                    st.success("Saved. Future plans will lean toward similar recipes.")
-
-        with act_replace:
-            if st.button("Replace", key=f"meal_replace_{selected_day}_{idx}_{recipe_id}", type="secondary"):
-                if recipe_id is None:
-                    st.error("Cannot replace a meal without recipe id.")
-                else:
-                    exclude_ids = [
-                        int(m.get("recipe_id"))
-                        for m in day_data.get("meals", [])
-                        if m.get("recipe_id") is not None
-                    ]
-                    replacement = request_replacement(
-                        username=st.session_state.get("logged_in_user"),
-                        day=int(selected_day),
-                        meal_type=str(meal.get("meal_type", "")),
-                        current_recipe_id=int(recipe_id),
-                        exclude_recipe_ids=exclude_ids,
+    for tab, day_data in zip(tabs, sorted_days):
+        day_num = int(day_data.get("day"))
+        with tab:
+            for idx, meal in enumerate(day_data.get("meals", [])):
+                meal_type = str(meal.get("meal_type", "")).capitalize()
+                title = meal.get("title", "Untitled meal")
+                recipe_id = meal.get("recipe_id")
+                calories = _meal_calories(meal)
+                detail = fetch_recipe(int(recipe_id), show_error=False) if recipe_id is not None else {}
+                image_url = detail.get("image_url")
+                image_html = ""
+                if image_url:
+                    image_html = (
+                        '<div class="meal-thumb-wrap">'
+                        f'<img src="{escape(image_url)}" alt="{escape(title)}" width="190" />'
+                        "</div>"
                     )
-                    new_meal = replacement.get("meal")
-                    if new_meal:
-                        meal.update(new_meal)
-                        st.session_state["last_mealplan"] = data
-                        st.success("Replaced with a same-category recipe tuned to your likes.")
-                        st.rerun()
 
-        with act_dislike:
-            if st.button("Doesn't Fit", key=f"meal_dislike_{selected_day}_{idx}_{recipe_id}", type="secondary"):
-                if recipe_id is None:
-                    st.error("Cannot submit feedback without recipe id.")
-                elif submit_feedback(st.session_state.get("logged_in_user"), int(recipe_id), "dislike"):
-                    st.success("Saved. We'll avoid similar options.")
+                cal_text = f"{calories} cal" if calories > 0 else "Meal"
+                st.markdown(
+                    f"""
+                    <div class="daily-meal-card">
+                      <div style="display:flex; justify-content:space-between; gap:0.9rem; align-items:center;">
+                        <div style="flex:1; min-width:0;">
+                          <h3 class="meal-type-title">{escape(meal_type)}</h3>
+                          <p class="meal-name">{escape(title)}</p>
+                          <span class="meal-cal-pill">{escape(cal_text)}</span>
+                        </div>
+                        <div>{image_html}</div>
+                      </div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+                open_key = f"open_recipe_{day_num}_{idx}_{recipe_id}"
+                if st.session_state.get(open_key):
+                    detail = st.session_state.get(f"{open_key}_detail")
+                    if detail:
+                        image_url = detail.get("image_url")
+                        meta_parts = []
+                        if detail.get("prep_time") is not None:
+                            meta_parts.append(f"Prep: {detail['prep_time']} min")
+                        if detail.get("cook_time") is not None:
+                            meta_parts.append(f"Cook: {detail['cook_time']} min")
+                        if detail.get("total_time") is not None:
+                            meta_parts.append(f"Total: {detail['total_time']} min")
+                        if detail.get("servings") is not None:
+                            meta_parts.append(f"Servings: {detail['servings']}")
+                        meta_html = " | ".join(escape(part) for part in meta_parts)
 
-        with act_open:
-            view_label = f"Open Recipe #{recipe_id}" if recipe_id is not None else "Open Recipe"
-            if st.button(view_label, key=f"recipe_open_{selected_day}_{idx}_{recipe_id}", type="secondary"):
-                if recipe_id is None:
-                    st.error("This meal is missing a recipe id.")
-                else:
-                        detail = fetch_recipe(int(recipe_id), show_error=True)
-                        if detail:
-                            st.session_state["selected_recipe"] = detail
-                            st.session_state["active_page"] = "recipe"
-                            st.rerun()
+                        ingredients = detail.get("ingredients", []) or []
+                        ing_items = "".join(f"<li>{escape(str(item))}</li>" for item in ingredients)
+                        ing_html = ing_items or "<li>No ingredient list available.</li>"
 
-    _render_grocery_preview(data)
+                        directions = detail.get("directions", []) or []
+                        dir_items = "".join(f"<li>{escape(str(step))}</li>" for step in directions)
+                        dir_html = dir_items or "<li>No step-by-step instructions available.</li>"
 
+                        source_link = ""
+                        if detail.get("url"):
+                            source_link = f"<a href=\"{escape(detail['url'])}\" target=\"_blank\">Open Source Recipe</a>"
+
+                        image_block = ""
+                        if image_url:
+                            image_block = f"<img src=\"{escape(image_url)}\" alt=\"{escape(title)}\" width=\"320\" />"
+
+                        nutrition_parts = []
+                        if detail.get("calories") is not None:
+                            nutrition_parts.append(f"Calories: {detail['calories']}")
+                        if detail.get("protein_g") is not None:
+                            nutrition_parts.append(f"Protein: {detail['protein_g']} g")
+                        if detail.get("carbs_g") is not None:
+                            nutrition_parts.append(f"Carbs: {detail['carbs_g']} g")
+                        if detail.get("fat_g") is not None:
+                            nutrition_parts.append(f"Fat: {detail['fat_g']} g")
+                        nutrition_html = " | ".join(escape(part) for part in nutrition_parts)
+
+                        st.markdown(
+                            f"""
+                            <div class="recipe-detail-box">
+                              <h3>{escape(title)}</h3>
+                              {image_block}
+                              <div class="recipe-detail-meta">{meta_html}</div>
+                              <div class="recipe-detail-meta">{nutrition_html}</div>
+                              <div>{source_link}</div>
+                              <h4>Ingredients</h4>
+                              <ul>{ing_html}</ul>
+                              <h4>Instructions</h4>
+                              <ol>{dir_html}</ol>
+                            </div>
+                            """,
+                            unsafe_allow_html=True,
+                        )
+                act_like, act_dislike, act_doesnt_fit, act_replace, act_open = st.columns([1, 1, 1.1, 1.1, 1.4])
+
+                with act_like:
+                    if st.button("Like", key=f"meal_like_{day_num}_{idx}_{recipe_id}", type="secondary"):
+                        if recipe_id is None:
+                            st.error("Cannot like a meal without recipe id.")
+                        elif submit_feedback(st.session_state.get("logged_in_user"), int(recipe_id), "like"):
+                            st.success("Saved. Future plans will lean toward similar recipes.")
+
+                with act_dislike:
+                    if st.button("Don't Like", key=f"meal_dislike_{day_num}_{idx}_{recipe_id}", type="secondary"):
+                        if recipe_id is None:
+                            st.error("Cannot submit feedback without recipe id.")
+                        elif submit_feedback(st.session_state.get("logged_in_user"), int(recipe_id), "dislike"):
+                            st.success("Saved. We'll avoid similar options.")
+
+                with act_doesnt_fit:
+                    if st.button("Doesn't Fit", key=f"meal_doesnt_fit_{day_num}_{idx}_{recipe_id}", type="secondary"):
+                        if recipe_id is None:
+                            st.error("Cannot submit feedback without recipe id.")
+                        elif submit_feedback(st.session_state.get("logged_in_user"), int(recipe_id), "doesnt_fit"):
+                            loading_placeholder = st.empty()
+                            with loading_placeholder.container():
+                                st.info("Finding a better fit…")
+                            exclude_ids = [
+                                int(m.get("recipe_id"))
+                                for d in data.get("days", [])
+                                for m in d.get("meals", [])
+                                if m.get("recipe_id") is not None
+                            ]
+                            replacement = request_replacement(
+                                username=st.session_state.get("logged_in_user"),
+                                day=day_num,
+                                meal_type=str(meal.get("meal_type", "")),
+                                current_recipe_id=int(recipe_id),
+                                exclude_recipe_ids=exclude_ids,
+                            )
+                            new_meal = replacement.get("meal")
+                            if new_meal:
+                                meal.update(new_meal)
+                                st.session_state["last_mealplan"] = data
+                                saved = save_mealplan(st.session_state.get("logged_in_user"), data)
+                                if saved:
+                                    st.session_state["last_mealplan"] = saved
+                                refresh_grocery_now(
+                                    username=st.session_state.get("logged_in_user"),
+                                    days=(st.session_state.get("last_mealplan") or data).get("days", []),
+                                )
+                                loading_placeholder.empty()
+                                st.success("Saved. We'll avoid meals like this.")
+                                st.rerun()
+                            else:
+                                loading_placeholder.empty()
+                                transient_success("Saved. We'll avoid meals like this.")
+
+                with act_replace:
+                    if st.button("Replace", key=f"meal_replace_{day_num}_{idx}_{recipe_id}", type="secondary"):
+                        if recipe_id is None:
+                            st.error("Cannot replace a meal without recipe id.")
+                        else:
+                            loading_placeholder = st.empty()
+                            with loading_placeholder.container():
+                                st.info("Loading a replacement recipe…")
+                            exclude_ids = [
+                                int(m.get("recipe_id"))
+                                for d in data.get("days", [])
+                                for m in d.get("meals", [])
+                                if m.get("recipe_id") is not None
+                            ]
+                            replacement = request_replacement(
+                                username=st.session_state.get("logged_in_user"),
+                                day=day_num,
+                                meal_type=str(meal.get("meal_type", "")),
+                                current_recipe_id=int(recipe_id),
+                                exclude_recipe_ids=exclude_ids,
+                            )
+                            new_meal = replacement.get("meal")
+                            if new_meal:
+                                meal.update(new_meal)
+                                st.session_state["last_mealplan"] = data
+                                saved = save_mealplan(st.session_state.get("logged_in_user"), data)
+                                if saved:
+                                    st.session_state["last_mealplan"] = saved
+                                refresh_grocery_now(
+                                    username=st.session_state.get("logged_in_user"),
+                                    days=(st.session_state.get("last_mealplan") or data).get("days", []),
+                                )
+                                loading_placeholder.empty()
+                                st.success("Replaced with a same-category recipe tuned to your likes.")
+                                st.rerun()
+
+                with act_open:
+                    is_open = st.session_state.get(open_key, False)
+                    view_label = "Close Recipe Details" if is_open else "Open Recipe Details"
+                    if st.button(view_label, key=f"recipe_open_{day_num}_{idx}_{recipe_id}", type="secondary"):
+                        if recipe_id is None:
+                            st.error("This meal is missing a recipe id.")
+                        else:
+                            if is_open:
+                                st.session_state[open_key] = False
+                                st.rerun()
+                            else:
+                                detail = fetch_recipe(int(recipe_id), show_error=True)
+                                if detail:
+                                    st.session_state[open_key] = True
+                                    st.session_state[f"{open_key}_detail"] = detail
+                                    st.rerun()
 
 def show_recipe_details_page() -> None:
     st.title("Recipe Instructions")
@@ -864,19 +1313,92 @@ def show_recipe_details_page() -> None:
 
 # Grocery Page
 def show_grocery_page() -> None:
-    st.title("Nutrition AI Agent — Grocery List")
+    st.title("Grocery List")
+    poll_grocery_refresh()
+    refresh_error = st.session_state.get("grocery_refresh_error")
+    if refresh_error:
+        st.error(refresh_error)
+        st.session_state["grocery_refresh_error"] = None
+
     gp = st.session_state.get("last_mealplan")
-    if not gp:
-        st.info("No generated meal plan is available yet. Open the Meal Plan tab to load one.")
+    username = st.session_state.get("logged_in_user")
+    cached_user = st.session_state.get("last_mealplan_user")
+    needs_refresh = st.session_state.get("needs_plan_refresh", False)
+    mealplan_generating = st.session_state.get("mealplan_generation_in_progress", False)
+    is_first_plan_generation = st.session_state.get("is_first_plan_generation", False)
+    pending_initial_generation = st.session_state.get("pending_initial_generation", False)
+    had_successful_login = st.session_state.get("had_successful_login", False)
+    refresh_future = st.session_state.get("grocery_refresh_future")
+    grocery_refreshing = bool(refresh_future and not refresh_future.done())
+    generating_msg = "Your meal plan is still generating, so your grocery list is being prepared too."
+    has_current_plan = bool(gp) and cached_user == username
+    if not has_current_plan:
+        first_time_pending = had_successful_login and not gp and (is_first_plan_generation or pending_initial_generation)
+        if needs_refresh or mealplan_generating or grocery_refreshing or first_time_pending:
+            st.info(generating_msg)
+        else:
+            st.info("No grocery list is available yet. Open the Meal Plan tab to load your latest plan.")
         return
-    grocery = gp.get("grocery_list", [])
-    text = gp.get("grocery_text")
+
+    is_updating = needs_refresh or mealplan_generating or grocery_refreshing
+    if is_updating:
+        st.info("Your meal plan is being regenerated, so your grocery list is updating too.")
+
+    grocery = (gp or {}).get("grocery_list", [])
+    text = (gp or {}).get("grocery_text")
+    has_grocery_data = bool(text) or bool(grocery)
+    if not has_grocery_data:
+        st.info(generating_msg)
+    else:
+        st.session_state["pending_initial_generation"] = False
+
+    # Always try to populate grocery data immediately when missing.
+    if not has_grocery_data:
+        days_for_user = (gp or {}).get("days", [])
+        refreshed = refresh_grocery_now(username, days_for_user)
+        gp = st.session_state.get("last_mealplan") or {}
+        grocery = gp.get("grocery_list", [])
+        text = gp.get("grocery_text")
+        has_grocery_data = bool(text) or bool(grocery)
+
+        if not refreshed and not has_grocery_data:
+            fallback_items = _build_local_grocery_fallback(days_for_user)
+            if fallback_items:
+                gp["grocery_list"] = fallback_items
+                gp["grocery_text"] = None
+                st.session_state["last_mealplan"] = gp
+                grocery = fallback_items
+                text = None
+                has_grocery_data = True
+                st.info("Showing a quick grocery list from recipe ingredients while full grocery processing catches up.")
+
+    if not has_grocery_data:
+        st.info(generating_msg)
+        return
     if text:
-        st.markdown(text)
+        if is_updating:
+            st.markdown("<div style='opacity:0.45;'>", unsafe_allow_html=True)
+        lines = [line.strip("- ").strip() for line in text.splitlines() if line.strip()]
+        for idx, line in enumerate(lines):
+            col_check, col_text = st.columns([0.03, 0.97], gap="small", vertical_alignment="center")
+            with col_check:
+                checked = st.checkbox(
+                    f"Grocery item {idx + 1}",
+                    key=f"grocery_text_item_{idx}",
+                    label_visibility="collapsed",
+                )
+            with col_text:
+                safe_line = escape(line)
+                display = f"~~{safe_line}~~" if checked else safe_line
+                st.markdown(display)
+        if is_updating:
+            st.markdown("</div>", unsafe_allow_html=True)
         return
     if not grocery:
         st.write("No grocery items in last meal plan.")
         return
+    if is_updating:
+        st.markdown("<div style='opacity:0.45;'>", unsafe_allow_html=True)
     for item in grocery:
         name = item.get("name")
         quantity = item.get("quantity")
@@ -889,7 +1411,21 @@ def show_grocery_page() -> None:
         if name:
             parts.append(str(name))
         if parts:
-            st.write(f"- {' '.join(parts)}")
+            label = " ".join(parts)
+            key = f"grocery_item_{name}_{quantity}_{unit}"
+            col_check, col_text = st.columns([0.03, 0.97], gap="small", vertical_alignment="center")
+            with col_check:
+                checked = st.checkbox(
+                    f"Grocery item {name}",
+                    key=key,
+                    label_visibility="collapsed",
+                )
+            with col_text:
+                safe_label = escape(label)
+                display = f"~~{safe_label}~~" if checked else safe_label
+                st.markdown(display)
+    if is_updating:
+        st.markdown("</div>", unsafe_allow_html=True)
 
 # main app flow
 if "logged_in_user" not in st.session_state:
@@ -898,8 +1434,6 @@ if "creating_profile" not in st.session_state:
     st.session_state["creating_profile"] = False
 if "new_username" not in st.session_state:
     st.session_state["new_username"] = None
-if "show_tabs" not in st.session_state:
-    st.session_state["show_tabs"] = False  # controls whether to show the 3 tabs
 if "selected_recipe" not in st.session_state:
     st.session_state["selected_recipe"] = None
 if "recipe_cache" not in st.session_state:
@@ -908,48 +1442,96 @@ if "needs_plan_refresh" not in st.session_state:
     st.session_state["needs_plan_refresh"] = False
 if "last_mealplan_user" not in st.session_state:
     st.session_state["last_mealplan_user"] = None
-
-# If user not logged in or creating profile, show login/profile page
-if not st.session_state["logged_in_user"] or st.session_state["creating_profile"]:
-    if st.session_state["creating_profile"]:
-        show_profile_form(prefilled_username=st.session_state["new_username"])
+if "had_successful_login" not in st.session_state:
+    st.session_state["had_successful_login"] = False
+if "is_first_plan_generation" not in st.session_state:
+    st.session_state["is_first_plan_generation"] = False
+if "post_create_flush" not in st.session_state:
+    st.session_state["post_create_flush"] = False
+if "pending_initial_generation" not in st.session_state:
+    st.session_state["pending_initial_generation"] = False
+if "mealplan_generation_in_progress" not in st.session_state:
+    st.session_state["mealplan_generation_in_progress"] = False
+if "pending_grocery_refresh" not in st.session_state:
+    st.session_state["pending_grocery_refresh"] = None
+if "grocery_refresh_error" not in st.session_state:
+    st.session_state["grocery_refresh_error"] = None
+if "current_view" not in st.session_state:
+    if st.session_state.get("logged_in_user"):
+        st.session_state["current_view"] = "mainApp"
+    elif st.session_state.get("creating_profile"):
+        st.session_state["current_view"] = "createProfile"
     else:
+        st.session_state["current_view"] = "login"
+
+# One extra rerun after account creation to clear any stale create-form deltas.
+if st.session_state.get("post_create_flush"):
+    st.session_state["post_create_flush"] = False
+    st.rerun()
+
+# Single render-state gate: exactly one top-level view is mounted each run.
+current_view = st.session_state.get("current_view", "login")
+
+login_slot = st.empty()
+create_slot = st.empty()
+main_slot = st.empty()
+
+if current_view == "createProfile":
+    login_slot.empty()
+    main_slot.empty()
+    with create_slot.container():
+        show_profile_form(prefilled_username=st.session_state["new_username"])
+    st.stop()
+
+if current_view == "login":
+    # If we somehow lost the user after login, reset and show login UI.
+    if st.session_state.get("had_successful_login"):
+        st.session_state["had_successful_login"] = False
+    create_slot.empty()
+    main_slot.empty()
+    with login_slot.container():
         show_login_page()
-else:
-    # User is logged in and not creating profile: show tabs
-    st.session_state["show_tabs"] = True
+    st.stop()
 
-if st.session_state.get("show_tabs"):
-    # Navigation control
-    if "active_page" not in st.session_state:
-        st.session_state["active_page"] = "meal"
+# Fallback guard: main app requires authenticated user.
+if not st.session_state.get("logged_in_user"):
+    st.session_state["current_view"] = "login"
+    st.rerun()
 
-    if st.session_state["active_page"] in LEGACY_PAGE_KEYS:
-        st.session_state["active_page"] = LEGACY_PAGE_KEYS[st.session_state["active_page"]]
+# Logged-in app UI.
+login_slot.empty()
+create_slot.empty()
+with main_slot.container():
+    header_left, header_right = st.columns([0.85, 0.15], gap="small")
+    with header_right:
+        if st.button("Log Out", key="logout_btn", type="secondary", use_container_width=True):
+            st.session_state["logged_in_user"] = None
+            st.session_state["had_successful_login"] = False
+            st.session_state["needs_plan_refresh"] = False
+            st.session_state["is_first_plan_generation"] = False
+            st.session_state["pending_initial_generation"] = False
+            st.session_state["last_mealplan"] = None
+            st.session_state["last_mealplan_user"] = None
+            st.session_state["selected_recipe"] = None
+            st.session_state["creating_profile"] = False
+            st.session_state["mealplan_generation_in_progress"] = False
+            st.session_state["grocery_refresh_future"] = None
+            st.session_state["pending_grocery_refresh"] = None
+            st.session_state["grocery_refresh_error"] = None
+            st.session_state["current_view"] = "login"
+            st.rerun()
 
     page_keys = ["profile", "meal", "grocery"]
-    if st.session_state.get("selected_recipe"):
-        page_keys.append("recipe")
-    if st.session_state["active_page"] not in page_keys:
-        st.session_state["active_page"] = "meal"
+    tabs = st.tabs([NAV_LABELS[k] for k in page_keys])
 
-    nav_labels = [NAV_LABELS[k] for k in page_keys]
-    label_to_key = {NAV_LABELS[k]: k for k in page_keys}
-
-    selected_label = st.radio(
-        "Navigation",
-        nav_labels,
-        index=nav_labels.index(NAV_LABELS[st.session_state["active_page"]]),
-        horizontal=True
-    )
-
-    st.session_state["active_page"] = label_to_key[selected_label]
-
-    if st.session_state["active_page"] == "profile":
+    with tabs[0]:
         profile_form(prefilled_username=st.session_state.get("logged_in_user"))
-    elif st.session_state["active_page"] == "meal":
+    with tabs[1]:
         show_mealplan_page()
-    elif st.session_state["active_page"] == "grocery":
+    with tabs[2]:
         show_grocery_page()
-    elif st.session_state["active_page"] == "recipe":
-        show_recipe_details_page()
+
+    if st.session_state.get("selected_recipe"):
+        st.markdown("---")
+        with st.expander(NAV_LABELS["recipe"], expanded=False):
+            show_recipe_details_page()

@@ -1,7 +1,8 @@
 from agent.recommender import recommend
 from agent.interfaces import UserProfile, MealSlot
-from agent.mock_store import record_feedback
+from agent.feedback import record_feedback
 
+# for testing
 
 def print_top(label, recs, n=5):
     print("\n" + "=" * 80)

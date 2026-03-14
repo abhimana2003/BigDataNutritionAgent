@@ -1,20 +1,10 @@
 # agent/retrieval.py
 from __future__ import annotations
-
-from typing import Dict, List, Optional
-
-from agent.interfaces import (
-    MealSlot,
-    Recipe,
-    RecipeCandidate,
-    Retriever,
-    UserProfile,
-)
+from typing import List, Optional
+from agent.interfaces import (MealSlot,RecipeCandidate,Retriever,UserProfile)
 
 
 class RecommenderRetriever(Retriever):
-    """Retriever backed by the CSV-based recommender pipeline."""
-
     def retrieve(
         self,
         profile: UserProfile,
@@ -30,9 +20,8 @@ class RecommenderRetriever(Retriever):
             k=k,
         )
 
-
+# retriever for testing 
 class MockRetriever(Retriever):
-    """Returns pre-loaded candidates for testing / offline dev."""
 
     def __init__(self, candidates: Optional[List[RecipeCandidate]] = None):
         if candidates is not None:

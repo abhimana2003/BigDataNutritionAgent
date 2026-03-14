@@ -1,5 +1,6 @@
 from pydantic import BaseModel, Field
-from typing import List, Optional, Dict, Union
+from typing import List, Optional, Dict, Union, Any
+from datetime import date
 from enum import Enum
 from agent.interfaces import Recipe
 
@@ -109,11 +110,17 @@ class DayPlan(BaseModel):
 class MealPlanResponse(BaseModel):
     #profile_id: int
     username: str
+    week_start: Optional[date] = None
     days: List[DayPlan] = []
+    nutrition_targets: Optional[NutritionTargets] = None
     weekly_totals: Optional[NutritionTargets]
     grocery_list: Optional[List["GroceryItem"]]
     grocery_text: Optional[str] = None
     notes: Optional[str]
+
+
+class MealPlanSaveRequest(BaseModel):
+    meal_plan: Dict[str, Any]
 
 # grocery list objects 
 
@@ -128,12 +135,16 @@ class GroceryList(BaseModel):
     # optional pretty text (e.g. bullet list) that can be shown directly to users
     text: Optional[str] = None
 
+
+class GroceryListRequest(BaseModel):
+    days: List[DayPlan] = []
+
 # feedback / preference 
 
 class FeedbackEvent(BaseModel):
     username: str
     recipe_id: int
-    action: str  # "like" | "dislike"
+    action: str  # "like" | "dislike" | "doesnt_fit"
     timestamp: Optional[str] = None
 
 class FeedbackRequest(BaseModel):
@@ -197,6 +208,10 @@ class RecipeDetailResponse(BaseModel):
     cook_time: Optional[int] = None
     total_time: Optional[int] = None
     servings: Optional[int] = None
+    calories: Optional[float] = None
+    protein_g: Optional[float] = None
+    carbs_g: Optional[float] = None
+    fat_g: Optional[float] = None
     url: Optional[str] = None
 
 
@@ -205,6 +220,7 @@ class ReplaceMealRequest(BaseModel):
     meal_type: MealType
     current_recipe_id: int
     exclude_recipe_ids: List[int] = []
+    week_start: Optional[date] = None
 
 
 class ReplaceMealResponse(BaseModel):

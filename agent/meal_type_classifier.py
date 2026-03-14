@@ -1,29 +1,25 @@
 from __future__ import annotations
-
 import os
 import pickle
 import logging
 from typing import List
-
 from sklearn.feature_extraction.text import CountVectorizer
 from sklearn.linear_model import LogisticRegression
 from sklearn.pipeline import Pipeline
-
 from agent.interfaces import Recipe
 from database import SessionLocal
 from models import Recipe as RecipeORM
 
 LOGGER = logging.getLogger(__name__)
 
-# where the trained model is persisted
-MODEL_PATH = os.path.join(os.path.dirname(__file__), "meal_type_model.pkl")
+# where the trained model is stored 
+MODEL_PATH = os.path.join(os.path.dirname(__file__), "meal_type_model_v2.pkl")
 
 
 def _load_recipes_from_db() -> List[Recipe]:
     db = SessionLocal()
     try:
         orm_recipes = db.query(RecipeORM).all()
-        # avoid circular import
         from agent.adapters import orm_to_agent_recipe
 
         return [orm_to_agent_recipe(r) for r in orm_recipes]
@@ -32,34 +28,17 @@ def _load_recipes_from_db() -> List[Recipe]:
 
 
 def _label_recipe(r: Recipe) -> str:
-    """Weak label based on cuisine_path or tags."""
-    text = " ".join(
-        filter(None, [r.title or "", " ".join(r.ingredients or []), r.cuisine or "", " ".join(r.tags or [])])
-    ).lower()
-
-  
-    breakfast_keywords = [
-        "breakfast",
-        "pancake",
-        "waffle",
-        "oatmeal",
-        "cereal",
-        "granola",
-        "muffin",
-        "toast",
-        "bagel",
-        "omelet",
-        "omelette",
-        "yogurt",
-        "smoothie",
-        "frittata",
-    ]
-
-    for kw in breakfast_keywords:
-        if kw in text:
-            return "breakfast"
-
-    # otherwise we don't distinguish lunch vs dinner; treat as "lunchdinner"
+    """
+    Training label from ingest category.
+    category values expected: breakfast | main_meal | snack | dessert
+    """
+    category = str(r.category or "").strip().lower()
+    if category == "breakfast":
+        return "breakfast"
+    if category == "main_meal":
+        return "lunchdinner"
+    if category in {"snack", "dessert"}:
+        return "snack"
     return "lunchdinner"
 
 
@@ -72,14 +51,20 @@ def train_classifier(force: bool = False) -> None:
         return
 
     recipes = _load_recipes_from_db()
-    texts = [" ".join([r.title or "", " ".join(r.ingredients or []), " ".join(r.tags or [])]) for r in recipes]
-    labels = [_label_recipe(r) for r in recipes]
+    # train only on rows with known category labels
+    labeled = [r for r in recipes if getattr(r, "category", None)]
+    texts = [" ".join([r.title or "", " ".join(r.ingredients or []), " ".join(r.tags or [])]) for r in labeled]
+    labels = [_label_recipe(r) for r in labeled]
+
+    if len(set(labels)) < 2:
+        LOGGER.warning("not enough label diversity for classifier; skipping training")
+        return
 
     from collections import Counter
     counter = Counter(labels)
     LOGGER.info("label distribution: %s", dict(counter))
 
-    LOGGER.info("training meal-type classifier on %d recipes", len(recipes))
+    LOGGER.info("training meal-type classifier on %d recipes", len(labeled))
     clf = Pipeline([
         ("vect", CountVectorizer(ngram_range=(1, 2), max_features=10000)),
         ("clf", LogisticRegression(max_iter=200))
@@ -101,8 +86,14 @@ def _load_model():
     except Exception as e:
         LOGGER.warning("failed to load meal-type model (%s); retraining", e)
         train_classifier(force=True)
-        with open(MODEL_PATH, "rb") as f:
-            return pickle.load(f)
+        if not os.path.exists(MODEL_PATH):
+            return None
+        try:
+            with open(MODEL_PATH, "rb") as f:
+                return pickle.load(f)
+        except Exception as e2:
+            LOGGER.warning("failed to load retrained meal-type model (%s)", e2)
+            return None
 
 
 # load model on import so prediction is fast
@@ -110,7 +101,7 @@ _MODEL = _load_model()
 
 
 def predict_meal_type(recipe: Recipe) -> str:
-    """Return predicted meal slot: "breakfast" or "lunchdinner"."""
+    """Return predicted meal type label: breakfast | lunchdinner | snack."""
     if _MODEL is None:
         return "lunchdinner"
     text = " ".join([recipe.title or "", " ".join(recipe.ingredients or []), " ".join(recipe.tags or [])])

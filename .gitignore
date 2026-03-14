@@ -3,4 +3,6 @@ __pycache__/
 venv/
 .venv/
 agent/meal_type_model.pkl
-run_project.sh
+run_project.sh.env
+
+.env

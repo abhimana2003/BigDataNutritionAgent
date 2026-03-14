@@ -1,11 +1,10 @@
 from __future__ import annotations
 import logging
 from typing import List
-
-from agent.constraints import filter_allowed
+from agent.constraints import filter_allowed, recipe_violations
 from agent.interfaces import MealSlot, RecipeCandidate, UserProfile
 from agent.scoring import is_slot_compatible, score_recipe
-from agent.mock_store import get_user_preferences  # you’ll implement in step 3
+from agent.feedback import get_user_preferences
 from agent.adapters import orm_to_agent_recipe
 from database import SessionLocal
 from models import Recipe as RecipeORM
@@ -28,8 +27,12 @@ def recommend(user_id: int, profile: UserProfile, slot: MealSlot, k: int = 10) -
     try:
         recipes = _load_recipes_from_db()
     except Exception as e:
-        logger.warning("DB recipe load failed; returning no candidates: %s", e)
-        return []
+        logger.warning("DB recipe load failed; falling back to mock recipes: %s", e)
+        try:
+            from agent.mock_data import MOCK_RECIPES
+            recipes = MOCK_RECIPES
+        except Exception:
+            return []
 
     if not recipes:
         logger.warning("Recipe DB is empty; returning no candidates")
@@ -44,6 +47,16 @@ def recommend(user_id: int, profile: UserProfile, slot: MealSlot, k: int = 10) -
 
     candidates: List[RecipeCandidate] = []
     for r in allowed:
+        violations = recipe_violations(profile, r)
+        if violations:
+            logger.warning(
+                "Skipping recipe %s for user %s due to constraint violations: %s",
+                getattr(r, "recipe_id", None),
+                user_id,
+                violations,
+            )
+            continue
+
         s, reasons = score_recipe(profile, r, prefs=prefs, slot=slot)
         candidates.append(RecipeCandidate(recipe_id=r.recipe_id, score=s, reasons=reasons, recipe=r))
 

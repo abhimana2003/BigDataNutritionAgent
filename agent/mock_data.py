@@ -1,6 +1,5 @@
 from __future__ import annotations
-
-from agent.interfaces import Recipe, RecipeCandidate, UserProfile, MealSlot
+from agent.interfaces import Recipe, RecipeCandidate, UserProfile
 
 MOCK_RECIPES = [
     Recipe(
@@ -361,6 +360,7 @@ def mock_candidates(k: int = 21) -> list[RecipeCandidate]:
 
 MOCK_PROFILE = UserProfile(
     user_id=1,
+    username="mock_user",
     age=30,
     height_feet=5,
     height_inches=8,

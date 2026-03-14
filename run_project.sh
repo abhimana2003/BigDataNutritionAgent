@@ -16,6 +16,14 @@ fi
 echo "Activating virtual environment"
 source venv/bin/activate
 
+if [ -f ".env" ]; then
+    echo "Loading environment variables from .env"
+    set -a
+    # shellcheck disable=SC1091
+    source .env
+    set +a
+fi
+
 echo "Installing dependencies"
 pip install --upgrade pip
 pip install -r requirements.txt
@@ -52,18 +60,14 @@ EOF
 
 echo "Ensuring database exists"
 
-psql postgres <<EOF
-DO
-\$do\$
-BEGIN
-   IF NOT EXISTS (
-      SELECT FROM pg_database WHERE datname = 'nutrition_ai'
-   ) THEN
-      CREATE DATABASE nutrition_ai OWNER nutrition_user;
-   END IF;
-END
-\$do\$;
-EOF
+if psql -Atqc "SELECT 1 FROM pg_database WHERE datname = 'nutrition_ai'" postgres | grep -q 1; then
+    echo "Database nutrition_ai already exists"
+else
+    createdb -O nutrition_user nutrition_ai
+fi
+
+echo "Initializing database schema"
+python3 init_db.py
 
 echo "Applying schema migration for account fields"
 psql nutrition_ai <<EOF
@@ -90,10 +94,13 @@ elif command -v fuser >/dev/null 2>&1; then
     fuser -k 8000/tcp 2>/dev/null
 fi
 
-echo "Initializing database"
-python3 init_db.py
+echo "Initializing database data"
 python3 populate_users.py
-python3 pipelines/ingest_recipes.py
+echo "Resetting recipes table"
+psql nutrition_ai -c "DROP TABLE IF EXISTS recipes CASCADE;"
+python -m pipelines.ingest_recipes
+echo "Training meal type classifier"
+python3 -c "from agent.meal_type_classifier import train_classifier; train_classifier(force=True)"
 
 
 echo "Starting FastAPI"

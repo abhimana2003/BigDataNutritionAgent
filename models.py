@@ -1,6 +1,7 @@
-from sqlalchemy import Column, Integer, String, Float, ARRAY, JSON, ForeignKey
+from sqlalchemy import Column, Integer, String, Float, ARRAY, JSON, ForeignKey, Date, DateTime
 from database import Base
 from sqlalchemy.orm import relationship
+from datetime import datetime
 
 
 class UserProfile(Base):
@@ -46,3 +47,25 @@ class Recipe(Base):
     estimated_cost = Column(Float)
     username = Column(String, ForeignKey("user_profiles.username"))
     user = relationship("UserProfile", back_populates="recipes")
+    category = Column(String, nullable=True, index=True)
+
+
+class MealPlanHistory(Base):
+    __tablename__ = "meal_plan_history"
+
+    id = Column(Integer, primary_key=True, index=True)
+    username = Column(String, ForeignKey("user_profiles.username"), index=True, nullable=False)
+    week_start = Column(Date, nullable=False, index=True)
+    recipe_ids = Column(JSON, nullable=False, default=list)
+    meal_plan = Column(JSON, nullable=True)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+
+class UserFeedback(Base):
+    __tablename__ = "user_feedback"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("user_profiles.id"), index=True, nullable=False)
+    recipe_id = Column(Integer, ForeignKey("recipes.id"), index=True, nullable=False)
+    action = Column(String, nullable=False)
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow, index=True)

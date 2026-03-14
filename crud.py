@@ -1,10 +1,11 @@
 from sqlalchemy.orm import Session
-from models import UserProfile
+from models import UserProfile, MealPlanHistory
 import schemas
 from fastapi import HTTPException
 import models
 from sqlalchemy.exc import IntegrityError
 from auth_utils import hash_password, verify_password
+from datetime import datetime, date
 
 
 def upsert_user_profile(db: Session, username: str, profile: schemas.UserProfileCreate):
@@ -69,3 +70,65 @@ def update_user_profile_by_username(db: Session, username: str, profile):
     db.commit()
     db.refresh(db_profile)
     return db_profile
+
+
+def get_latest_mealplan_history_before_or_on(db: Session, username: str, week_start: date):
+    return (
+        db.query(MealPlanHistory)
+        .filter(MealPlanHistory.username == username, MealPlanHistory.week_start <= week_start)
+        .order_by(MealPlanHistory.week_start.desc(), MealPlanHistory.created_at.desc())
+        .first()
+    )
+
+
+def get_mealplan_history_for_week(db: Session, username: str, week_start: date):
+    return (
+        db.query(MealPlanHistory)
+        .filter(MealPlanHistory.username == username, MealPlanHistory.week_start == week_start)
+        .order_by(MealPlanHistory.created_at.desc())
+        .first()
+    )
+
+
+def get_latest_mealplan_history(db: Session, username: str):
+    return (
+        db.query(MealPlanHistory)
+        .filter(MealPlanHistory.username == username)
+        .order_by(MealPlanHistory.created_at.desc())
+        .first()
+    )
+
+
+def upsert_mealplan_history(
+    db: Session,
+    username: str,
+    week_start: date,
+    recipe_ids: list[int],
+    meal_plan: dict | None = None,
+):
+    existing = (
+        db.query(MealPlanHistory)
+        .filter(MealPlanHistory.username == username, MealPlanHistory.week_start == week_start)
+        .order_by(MealPlanHistory.created_at.desc())
+        .first()
+    )
+    if existing:
+        existing.recipe_ids = recipe_ids
+        if meal_plan is not None:
+            existing.meal_plan = meal_plan
+        existing.created_at = datetime.utcnow()
+        db.commit()
+        db.refresh(existing)
+        return existing
+
+    record = MealPlanHistory(
+        username=username,
+        week_start=week_start,
+        recipe_ids=recipe_ids,
+        meal_plan=meal_plan,
+        created_at=datetime.utcnow(),
+    )
+    db.add(record)
+    db.commit()
+    db.refresh(record)
+    return record
