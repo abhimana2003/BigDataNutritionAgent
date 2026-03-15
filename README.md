@@ -18,13 +18,13 @@ We developed a Nutrition AI system that  generates personalized meal plans, reci
 ## Setup
 1. Create a Groq API key: https://console.groq.com/keys
 
-2. Copy the example env file
+2. Open terminal (command line) and copy the example env file using the following command
 
     ```bash
     cp .env.example .env
     ```
 
-3. Add your key
+3. Open the env file just created. Add your key where it says
 
     ```env
     GROQ_API_KEY=your_groq_key_here
